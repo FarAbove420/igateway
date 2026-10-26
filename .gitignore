@@ -1,0 +1,16 @@
+# Build output
+build.noindex/
+
+# Downloaded and built dependencies (deps/build-deps.zsh)
+deps/downloads/
+deps/tools/
+deps/build/
+deps/out/
+
+# Test output
+tests/build/
+
+.DS_Store
+
+# Release zips (release.zsh)
+dist/

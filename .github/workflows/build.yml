@@ -1,0 +1,35 @@
+# Builds the app and runs all tests on every push and pull request.
+name: Build and test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest   # Apple Silicon
+    steps:
+      - uses: actions/checkout@v7
+
+      # Downloads and the built libraries, reused until build-deps.zsh changes.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps/downloads
+            deps/tools
+            deps/out
+          key: deps-${{ hashFiles('deps/build-deps.zsh') }}
+
+      - name: Dependencies
+        run: ./deps/build-deps.zsh --test-server
+
+      - name: App
+        run: ./build.zsh
+
+      - name: Tests
+        run: ./tests/run.zsh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: iGateway.exe
+          path: build.noindex/iGateway.exe.app
