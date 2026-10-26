@@ -249,6 +249,9 @@ FREERDP_OPTIONS=(
   -DWITH_GSM=OFF
   -DCHANNEL_URBDRC=OFF
 )
+# pkg-config, when installed (Homebrew's often is), may only see our own
+# libraries: elsewhere it would point CMake at Homebrew's.
+export PKG_CONFIG_LIBDIR="$OUT/lib/pkgconfig" PKG_CONFIG_PATH=""
 step freerdp.log "$CMAKE" -S "$FREERDP_SRC" -B "$BUILD/freerdp" -G "Unix Makefiles" -Wno-dev $FREERDP_OPTIONS
 step freerdp.log "$CMAKE" --build "$BUILD/freerdp" -j "$JOBS"
 DESTDIR="$STAGE-freerdp" step freerdp.log "$CMAKE" --install "$BUILD/freerdp"
