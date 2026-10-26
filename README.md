@@ -53,6 +53,17 @@ minute and only has to run once. The second builds the app and puts it in
 - No smartcards, printers, microphone, USB devices or multiple monitors.
 - H.264 video is decoded in software.
 
+## What's in here
+
+- `swift/`: the app (window, host list, sessions, clipboard, keyboard)
+- `bridge/`: a small C layer between the app and FreeRDP
+- `deps/build-deps.zsh`: downloads and builds FreeRDP, OpenSSL and FFmpeg
+- `build.zsh`: builds the app; `release.zsh`: packs it for a release
+- `tests/`: the tests, run with `tests/run.zsh`
+- `icon/`: the icons and the code that draws them
+- `docs/`: how it works, and the images in this README
+- `.github/workflows/`: builds and tests every push on GitHub
+
 ## More
 
 - [How it works, and why](docs/how-it-works.md)
