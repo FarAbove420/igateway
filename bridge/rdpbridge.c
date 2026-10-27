@@ -61,10 +61,6 @@ struct RDPSession {
     char *error;
 
     pthread_mutex_t lock;
-    /* The graphics pipeline runs on FreeRDP's dynamic channel thread: it
-       resizes and paints the desktop there, while the session thread copies
-       it out. Held around all three, as the SDL client does (_critical). */
-    pthread_mutex_t gdiLock;
 
     /* Frames. Dirty area accumulated between pushes. */
     bool dirty;
@@ -146,7 +142,6 @@ static BOOL bridge_end_paint(rdpContext *context)
     if (gdi->suppressOutput || hwnd->invalid->null || hwnd->ninvalid < 1)
         return TRUE;
 
-    pthread_mutex_lock(&s->gdiLock);
     for (INT32 i = 0; i < hwnd->ninvalid; i++) {
         const GDI_RGN *r = &hwnd->cinvalid[i];
         if (r->w <= 0 || r->h <= 0) continue;
@@ -162,7 +157,6 @@ static BOOL bridge_end_paint(rdpContext *context)
             if (bottom > s->dirtyBottom) s->dirtyBottom = bottom;
         }
     }
-    pthread_mutex_unlock(&s->gdiLock);
     return TRUE;
 }
 
@@ -172,24 +166,29 @@ static BOOL bridge_desktop_resize(rdpContext *context)
 {
     RDPSession *s = session_of(context);
     rdpSettings *settings = context->settings;
-    if (s) pthread_mutex_lock(&s->gdiLock);
-    BOOL ok = gdi_resize(context->gdi,
-                         freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth),
-                         freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight));
-    if (ok && s) mark_full_dirty(s);
-    if (s) pthread_mutex_unlock(&s->gdiLock);
-    return ok;
+    if (!gdi_resize(context->gdi,
+                    freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth),
+                    freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight)))
+        return FALSE;
+    if (s) mark_full_dirty(s);
+    return TRUE;
 }
 
 static void push_frame_locked(RDPSession *s, bool force);
 
-/* The copy happens inside the frame callback, so the lock stays held until it
-   returns: a resize on the channel thread can't free the buffer mid-copy. */
+/* The graphics pipeline paints and resizes the desktop on FreeRDP's dynamic
+   channel thread, while this copies it out on the session thread. FreeRDP's
+   update lock already covers its painting (update_begin_paint/end_paint) and
+   is taken by gdi_resize before the buffer is freed, so holding it for the
+   copy keeps a resize from freeing the buffer mid-copy. It is re-entrant, so
+   a thread already holding it is fine. */
 static void push_frame(RDPSession *s, bool force)
 {
-    pthread_mutex_lock(&s->gdiLock);
+    rdpUpdate *update = s->context ? s->context->update : NULL;
+    if (!update) return;
+    rdp_update_lock(update);
     push_frame_locked(s, force);
-    pthread_mutex_unlock(&s->gdiLock);
+    rdp_update_unlock(update);
 }
 
 static void push_frame_locked(RDPSession *s, bool force)
@@ -640,9 +639,7 @@ static BOOL bridge_post_connect(freerdp *instance)
         s->sentScale = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopScaleFactor);
         if (s->sentScale == 0) s->sentScale = 100;
         pthread_mutex_unlock(&s->lock);
-        pthread_mutex_lock(&s->gdiLock);
         mark_full_dirty(s);
-        pthread_mutex_unlock(&s->gdiLock);
         report_state(s, RDPSessionStateConnected, NULL);
     }
     return TRUE;
@@ -827,7 +824,6 @@ RDPSession *rdp_session_create(const char *const *argv, int argc,
     RDPSession *s = calloc(1, sizeof(RDPSession));
     if (!s) return NULL;
     pthread_mutex_init(&s->lock, NULL);
-    pthread_mutex_init(&s->gdiLock, NULL);
     if (callbacks) s->cb = *callbacks;
 
     rdpContext *context = freerdp_client_context_new(&entry);
@@ -904,7 +900,6 @@ void rdp_session_free(RDPSession *s)
     if (s->context) freerdp_client_context_free(s->context);
     free(s->error);
     pthread_mutex_destroy(&s->lock);
-    pthread_mutex_destroy(&s->gdiLock);
     free(s);
 }
 
