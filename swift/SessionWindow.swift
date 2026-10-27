@@ -226,6 +226,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, Conne
             overlay.isHidden = true
             spinner.stopAnimation(nil)
             window?.makeFirstResponder(desktop)
+            desktop.syncLocks()
             scheduleResize()
         case .disconnected:
             guard !closing else { return }
@@ -304,6 +305,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, Conne
     func windowDidBecomeKey(_ notification: Notification) {
         PasteboardWatcher.shared.check()
         window?.makeFirstResponder(desktop)
+        desktop.syncLocks()
     }
 
     func windowWillClose(_ notification: Notification) {

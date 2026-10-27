@@ -131,6 +131,8 @@ protocol InputSink: AnyObject {
     func sendXButton(_ button: Int, down: Bool, at point: CGPoint)
     func sendWheel(horizontal: Bool, units: Int)
     func sendKey(scancode: UInt16, down: Bool, repeat isRepeat: Bool)
+    /// Sets Caps Lock in Windows to the Mac's state.
+    func syncLocks(capsLock: Bool)
     func sendText(_ text: String) -> Bool
     func scancode(forMacKey keyCode: UInt16) -> UInt16
 }
@@ -363,6 +365,12 @@ final class Connection: InputSink {
     func sendKey(scancode: UInt16, down: Bool, repeat isRepeat: Bool) {
         guard let session, scancode != 0 else { return }
         rdp_session_send_key(session, scancode, down, isRepeat)
+    }
+
+    /// Num Lock stays on: a Mac keypad always types digits.
+    func syncLocks(capsLock: Bool) {
+        guard let session else { return }
+        rdp_session_send_locks(session, capsLock, true)
     }
 
     /// False when the server does not take Unicode input.

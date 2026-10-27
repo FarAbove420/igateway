@@ -159,6 +159,10 @@ uint16_t rdp_wheel_flags(bool horizontal, int step);
 /// Mouse buttons 4 and 5 (back and forward on most mice).
 void rdp_session_send_xbutton(RDPSession *session, int button, bool down, uint16_t x, uint16_t y);
 void rdp_session_send_key(RDPSession *session, uint16_t scancode, bool down, bool repeat);
+
+/// Sets Windows' lock keys to the given states (MS-RDPBCGR synchronize event),
+/// so Caps Lock in Windows matches the Mac's.
+void rdp_session_send_locks(RDPSession *session, bool capsLock, bool numLock);
 /// Returns false if the server does not take Unicode input.
 bool rdp_session_send_unicode(RDPSession *session, uint16_t code, bool down);
 

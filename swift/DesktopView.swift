@@ -237,10 +237,9 @@ final class DesktopView: NSView, NSTextInputClient {
         case 0x3A: track(Device.lAlt, remote: raw_mode ? 0x38 : nil)
         case 0x3D: track(Device.rAlt, remote: raw_mode ? 0x138 : nil)
         case 0x39:
-            if raw_mode {
-                connection?.sendKey(scancode: 0x3A, down: true)
-                connection?.sendKey(scancode: 0x3A, down: false)
-            }
+            // Caps Lock is a state, not a held key: tell Windows the state.
+            // Toggling it with key presses drifts out of step with the Mac.
+            connection?.syncLocks(capsLock: raw & NSEvent.ModifierFlags.capsLock.rawValue != 0)
         default: break
         }
 
@@ -262,6 +261,12 @@ final class DesktopView: NSView, NSTextInputClient {
         let alt: UInt16 = macModifiers.contains(0x3D) && !macModifiers.contains(0x3A) ? 0x138 : 0x38
         deferredAlt = alt
         connection?.sendKey(scancode: alt, down: true)
+    }
+
+    /// Brings Windows' Caps Lock in line with the Mac's, after connecting and
+    /// whenever the window comes back (it may have changed elsewhere).
+    func syncLocks() {
+        connection?.syncLocks(capsLock: NSEvent.modifierFlags.contains(.capsLock))
     }
 
     /// Lets go of everything held at the server. Called when the window stops

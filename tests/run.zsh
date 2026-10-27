@@ -74,8 +74,9 @@ if [[ -x "$SFREERDP_SERVER" ]]; then
     /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=localhost" \
       -keyout "$OUT/server/key.pem" -out "$OUT/server/cert.pem" 2>/dev/null
   fi
-  "$SFREERDP_SERVER" --port=13389 --cert="$OUT/server/cert.pem" --key="$OUT/server/key.pem" \
-    > "$OUT/server.log" 2>&1 &
+  # From its own folder: it looks for its test icon there.
+  (cd "${SFREERDP_SERVER:h}" && exec "$SFREERDP_SERVER" --port=13389 \
+    --cert="$OUT/server/cert.pem" --key="$OUT/server/key.pem") > "$OUT/server.log" 2>&1 &
   server=$!
   trap 'kill $server 2>/dev/null' EXIT INT TERM
   for i in {1..50}; do nc -z 127.0.0.1 13389 2>/dev/null && break; sleep 0.2; done

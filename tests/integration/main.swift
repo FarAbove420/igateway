@@ -34,7 +34,18 @@ let connection = Connection(host: host, gateway: direct, server: Account(usernam
 connection.securityProtocol = "tls"   // TLS, so there is a certificate to ask about
 connection.delegate = probe
 connection.connect(pixelSize: CGSize(width: 1023, height: 700), scale: 100, password: "t", gatewayPassword: nil)
-RunLoop.main.run(until: Date().addingTimeInterval(6))
+// Wait for the session, then change Caps Lock while it is live.
+let start = Date()
+while connection.state != .connected, Date().timeIntervalSince(start) < 5 {
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+}
+RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+connection.syncLocks(capsLock: true)
+connection.syncLocks(capsLock: false)
+RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+let upAfterLocks = connection.state == .connected
+RunLoop.main.run(until: start.addingTimeInterval(6))
+
 
 var passed = 0, failed = 0
 func check(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "") {
@@ -43,6 +54,7 @@ func check(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "")
 check("connects", probe.states.contains("connected"), probe.states.joined(separator: " -> "))
 check("asks about the self-signed certificate once", probe.certificates == 1, "\(probe.certificates)")
 check("frames arrive", probe.frames > 0)
+check("a Caps Lock change leaves the session up", upAfterLocks)
 check("width is rounded down to even", Int(probe.size.width) == 1022, "\(probe.size)")
 if let s = probe.lastSurface {
     s.lock(options: .readOnly, seed: nil)

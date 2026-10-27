@@ -958,6 +958,13 @@ void rdp_session_send_key(RDPSession *s, uint16_t scancode, bool down, bool repe
     freerdp_input_send_keyboard_event_ex(s->context->input, down, repeat, scancode);
 }
 
+void rdp_session_send_locks(RDPSession *s, bool capsLock, bool numLock)
+{
+    if (!s || !s->context || !s->context->input) return;
+    UINT32 flags = (capsLock ? KBD_SYNC_CAPS_LOCK : 0) | (numLock ? KBD_SYNC_NUM_LOCK : 0);
+    freerdp_input_send_synchronize_event(s->context->input, flags);
+}
+
 bool rdp_session_send_unicode(RDPSession *s, uint16_t code, bool down)
 {
     if (!s || !s->context || !s->context->input) return false;

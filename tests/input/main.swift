@@ -9,6 +9,7 @@ final class Recorder: InputSink {
     func sendXButton(_ b: Int, down: Bool, at p: CGPoint) { log.append("xbutton \(b) \(down ? "down" : "up")") }
     func sendWheel(horizontal: Bool, units: Int) { log.append("\(horizontal ? "hwheel" : "wheel") \(units)") }
     func sendKey(scancode: UInt16, down: Bool, repeat r: Bool) { log.append(String(format: "key %03X %@", scancode, down ? "down" : "up")) }
+    func syncLocks(capsLock: Bool) { log.append("caps \(capsLock ? "on" : "off")") }
     func sendText(_ text: String) -> Bool { if unicodeWorks { log.append("text \(text)") }; return unicodeWorks }
     func scancode(forMacKey k: UInt16) -> UInt16 { rdp_scancode_for_mac_keycode(k, rdp_mac_keyboard_is_iso()) }
 }
@@ -51,6 +52,19 @@ func run(_ name: String, want: [String], _ body: () -> Void) {
 
 let cmdL = flags(.command, 0x8), cmdR = flags(.command, 0x10)
 let optL = flags(.option, 0x20), shiftL = flags(.shift, 0x2), ctlL = flags(.control, 0x1)
+
+print("== Caps Lock")
+let capsOn = NSEvent.ModifierFlags.capsLock
+run("Caps Lock on and off is passed as a state, never as a key press", want: ["caps on", "caps off"]) {
+    mod(0x39, capsOn)
+    mod(0x39, [])
+}
+view.keyboardMode = .scancodes
+run("same in raw-key mode, so Windows can't end up the other way round", want: ["caps on", "caps off"]) {
+    mod(0x39, capsOn)
+    mod(0x39, [])
+}
+view.keyboardMode = .characters
 
 print("== Shortcuts")
 run("Cmd-C becomes Ctrl+C, key pressed and released at once",

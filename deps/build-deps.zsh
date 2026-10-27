@@ -278,6 +278,9 @@ if (( TEST_SERVER )); then
   step freerdp-server.log "$CMAKE" --build "$BUILD/freerdp-server" --target sfreerdp-server -j "$JOBS"
   mkdir -p "$OUT/bin"
   cp "$BUILD/freerdp-server/server/Sample/sfreerdp-server" "$OUT/bin/"
+  # It shows this icon after login and drops the session when it can't find it
+  # in the folder it runs from. BMP, because WinPR reads that without extra libraries.
+  cp "$FREERDP_SRC/server/Sample/test_icon.bmp" "$OUT/bin/"
 fi
 
 print "Done: $OUT"
