@@ -28,10 +28,13 @@
 #include <winpr/synch.h>
 #include <winpr/sysinfo.h>
 #include <winpr/thread.h>
+#include <winpr/wlog.h>
 
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* ---------------------------------------------------------------------- */
 /* Types                                                                  */
@@ -59,6 +62,9 @@ struct RDPSession {
     volatile bool stopping;
     RDPCallbacks cb;
     char *error;
+    /* Saved when the connection fails, before FreeRDP tears down. */
+    RDPDiagnosis diag;
+    bool hasDiag;
 
     pthread_mutex_t lock;
 
@@ -105,6 +111,211 @@ static void report_state(RDPSession *s, RDPSessionState state, const char *detai
 static RDPSession *session_of(rdpContext *context)
 {
     return context ? ((BridgeContext *)context)->session : NULL;
+}
+
+/* ---------------------------------------------------------------------- */
+/* FreeRDP's log, written to a file and read along for the diagnosis      */
+/* ---------------------------------------------------------------------- */
+
+static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
+static FILE *g_log_file;
+static RDPDiagnosis g_diag = { .connectionState = -1, .gatewayProgress = -1, .authErrorProgress = -1 };
+#define DIAG_LINES 4
+static char g_lines[DIAG_LINES][300];
+static int g_line_count;
+
+/* The gateway's reason codes, from libfreerdp/core/gateway/tsg.h. */
+static const struct { const char *name; uint32_t code; } g_proxy_codes[] = {
+    { "E_PROXY_INTERNALERROR", 0x800759D8 },
+    { "E_PROXY_RAP_ACCESSDENIED", 0x800759DA },
+    { "E_PROXY_NAP_ACCESSDENIED", 0x800759DB },
+    { "E_PROXY_TS_CONNECTFAILED", 0x800759DD },
+    { "E_PROXY_ALREADYDISCONNECTED", 0x800759DF },
+    { "E_PROXY_CAPABILITYMISMATCH", 0x800759E9 },
+    { "E_PROXY_QUARANTINE_ACCESSDENIED", 0x800759ED },
+    { "E_PROXY_NOCERTAVAILABLE", 0x800759EE },
+    { "E_PROXY_COOKIE_BADPACKET", 0x800759F7 },
+    { "E_PROXY_COOKIE_AUTHENTICATION_ACCESS_DENIED", 0x800759F8 },
+    { "E_PROXY_UNSUPPORTED_AUTHENTICATION_METHOD", 0x800759F9 },
+    { "E_PROXY_MAXCONNECTIONSREACHED", 0x000059E6 },
+    { "E_PROXY_SESSIONTIMEOUT", 0x000059F6 },
+    { "E_PROXY_REAUTH_AUTHN_FAILED", 0x000059FA },
+    { "E_PROXY_REAUTH_CAP_FAILED", 0x000059FB },
+    { "E_PROXY_REAUTH_RAP_FAILED", 0x000059FC },
+};
+
+static bool is_proxy_code(uint32_t code)
+{
+    for (size_t i = 0; i < sizeof(g_proxy_codes) / sizeof(g_proxy_codes[0]); i++)
+        if (g_proxy_codes[i].code == code) return true;
+    return false;
+}
+
+/* "[time] [pid:tid] [LEVEL][tag] - [function]: " -> tag */
+static void prefix_tag(const char *prefix, char *tag, size_t size)
+{
+    tag[0] = 0;
+    const char *start = prefix ? strstr(prefix, "][") : NULL;
+    if (!start) return;
+    start += 2;
+    const char *end = strchr(start, ']');
+    if (!end) return;
+    size_t n = (size_t)(end - start);
+    if (n >= size) n = size - 1;
+    memcpy(tag, start, n);
+    tag[n] = 0;
+}
+
+static int tsg_progress(const char *name)
+{
+    static const char *states[] = { "INITIAL", "CONNECTED", "AUTHORIZED", "CHANNEL_CREATED", "PIPE_CREATED" };
+    for (int i = 0; i < 5; i++)
+        if (strncmp(name, states[i], strlen(states[i])) == 0) return i;
+    return -1;
+}
+
+/* Called with g_log_lock held. */
+static void diagnose(DWORD level, const char *tag, const char *function, const char *text)
+{
+    bool gateway = strncmp(tag, "com.freerdp.core.gateway", 24) == 0;
+
+    /* tsg_transition_to_state logs "TSG_STATE_X -> TSG_STATE_Y" at debug level. */
+    if (strcmp(tag, "com.freerdp.core.gateway.tsg") == 0) {
+        const char *arrow = strstr(text, "-> TSG_STATE_");
+        if (arrow) {
+            int progress = tsg_progress(arrow + strlen("-> TSG_STATE_"));
+            if (progress > g_diag.gatewayProgress) g_diag.gatewayProgress = progress;
+        }
+    }
+    if (level >= WLOG_WARN && gateway && g_diag.gatewayReason == 0) {
+        for (size_t i = 0; i < sizeof(g_proxy_codes) / sizeof(g_proxy_codes[0]); i++)
+            if (strstr(text, g_proxy_codes[i].name)) { g_diag.gatewayReason = g_proxy_codes[i].code; break; }
+        for (const char *hex = strstr(text, "0x"); hex && g_diag.gatewayReason == 0; hex = strstr(hex + 2, "0x")) {
+            uint32_t code = (uint32_t)strtoul(hex, NULL, 16);
+            if (is_proxy_code(code)) g_diag.gatewayReason = code;
+        }
+    }
+    if (level >= WLOG_ERROR) {
+        bool auth = strcmp(tag, "com.winpr.sspi") == 0 || strcmp(tag, "com.freerdp.core.auth") == 0 ||
+                    strcmp(tag, "com.freerdp.core.nla") == 0 || strstr(text, "SEC_E_") ||
+                    strstr(text, "STATUS_LOGON_FAILURE");
+        if (auth && !g_diag.authError) {
+            g_diag.authError = true;
+            g_diag.authErrorProgress = g_diag.gatewayProgress;
+        }
+        char *line = g_lines[g_line_count % DIAG_LINES];
+        snprintf(line, sizeof(g_lines[0]), "[%s] %s: %s", tag, function ? function : "", text);
+        g_line_count++;
+    }
+}
+
+static BOOL log_message(const wLogMessage *message)
+{
+    if (!message) return TRUE;
+    const char *prefix = message->PrefixString ? message->PrefixString : "";
+    const char *text = message->TextString ? message->TextString : "";
+    char tag[96];
+    prefix_tag(prefix, tag, sizeof(tag));
+
+    pthread_mutex_lock(&g_log_lock);
+    /* Debug lines are only read along (the gateway's state changes), not kept. */
+    if (g_log_file && message->Level >= WLOG_INFO) {
+        fprintf(g_log_file, "%s%s\n", prefix, text);
+        fflush(g_log_file);
+    }
+    diagnose(message->Level, tag, message->FunctionName, text);
+    pthread_mutex_unlock(&g_log_lock);
+    return TRUE;
+}
+
+void rdp_log_init(const char *directory)
+{
+    pthread_mutex_lock(&g_log_lock);
+    if (directory && !g_log_file) {
+        char path[1024], old[1040];
+        snprintf(path, sizeof(path), "%s/freerdp.log", directory);
+        struct stat info;
+        if (stat(path, &info) == 0 && info.st_size > 5 * 1024 * 1024) {
+            snprintf(old, sizeof(old), "%s/freerdp.1.log", directory);
+            rename(path, old);
+        }
+        g_log_file = fopen(path, "a");
+    }
+    pthread_mutex_unlock(&g_log_lock);
+
+    wLog *root = WLog_GetRoot();
+    if (!root) return;
+    wLogCallbacks callbacks = { .message = log_message };
+    if (WLog_SetLogAppenderType(root, WLOG_APPENDER_CALLBACK)) {
+        wLogAppender *appender = WLog_GetLogAppender(root);
+        if (appender) (void)WLog_ConfigureAppender(appender, "callbacks", &callbacks);
+    }
+    (void)WLog_SetLogLevel(root, WLOG_INFO);
+    /* The gateway's state changes are logged at debug level. */
+    (void)WLog_SetLogLevel(WLog_Get("com.freerdp.core.gateway.tsg"), WLOG_DEBUG);
+}
+
+void rdp_log_reset(void)
+{
+    pthread_mutex_lock(&g_log_lock);
+    g_diag = (RDPDiagnosis){ .connectionState = -1, .gatewayProgress = -1, .authErrorProgress = -1 };
+    g_line_count = 0;
+    pthread_mutex_unlock(&g_log_lock);
+}
+
+void rdp_log_diagnosis(RDPDiagnosis *out)
+{
+    if (!out) return;
+    pthread_mutex_lock(&g_log_lock);
+    *out = g_diag;
+    out->details[0] = 0;
+    int first = g_line_count > DIAG_LINES ? g_line_count - DIAG_LINES : 0;
+    for (int i = first; i < g_line_count; i++) {
+        strncat(out->details, g_lines[i % DIAG_LINES], sizeof(out->details) - strlen(out->details) - 2);
+        strncat(out->details, "\n", sizeof(out->details) - strlen(out->details) - 1);
+    }
+    pthread_mutex_unlock(&g_log_lock);
+}
+
+static RDPStage stage_of(CONNECTION_STATE state)
+{
+    if (state <= CONNECTION_STATE_NEGO) return RDPStageTransport;
+    if (state <= CONNECTION_STATE_AAD) return RDPStageLogin;
+    if (state < CONNECTION_STATE_LICENSING) return RDPStageSetup;
+    if (state == CONNECTION_STATE_LICENSING) return RDPStageLicensing;
+    if (state < CONNECTION_STATE_ACTIVE) return RDPStageActivation;
+    return RDPStageActive;
+}
+
+static void fill_from_context(rdpContext *context, RDPDiagnosis *d)
+{
+    d->errorCode = freerdp_get_last_error(context);
+    CONNECTION_STATE state = freerdp_get_state(context);
+    d->connectionState = (int32_t)state;
+    d->stage = stage_of(state);
+    snprintf(d->stateName, sizeof(d->stateName), "%s", freerdp_state_string(state));
+    snprintf(d->errorName, sizeof(d->errorName), "%s", freerdp_get_last_error_name(d->errorCode));
+}
+
+/* What the log showed plus where FreeRDP got to, saved at the failure. */
+static void save_diagnosis(RDPSession *s)
+{
+    if (!s || !s->context) return;
+    rdp_log_diagnosis(&s->diag);
+    fill_from_context(s->context, &s->diag);
+    s->hasDiag = true;
+}
+
+bool rdp_session_diagnosis(RDPSession *s, RDPDiagnosis *out)
+{
+    if (!s || !out) return false;
+    if (s->hasDiag) {
+        *out = s->diag;
+    } else {
+        rdp_log_diagnosis(out);
+        if (s->context) fill_from_context(s->context, out);
+    }
+    return true;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -750,6 +961,7 @@ static DWORD WINAPI session_thread(LPVOID arg)
     report_state(s, RDPSessionStateConnecting, NULL);
 
     if (!freerdp_connect(instance)) {
+        save_diagnosis(s);
         UINT32 code = freerdp_get_last_error(context);
         const char *name = freerdp_get_last_error_name(code);
         if (s->stopping) {
@@ -785,6 +997,7 @@ static DWORD WINAPI session_thread(LPVOID arg)
         if (code != FREERDP_ERROR_SUCCESS)
             set_error(s, freerdp_get_last_error_name(code));
     }
+    if (s->error && !s->stopping) save_diagnosis(s);
 
     freerdp_disconnect(instance);
 
@@ -877,6 +1090,8 @@ bool rdp_session_start(RDPSession *s)
 {
     if (!s || !s->context || s->error) return false;
     s->stopping = false;
+    s->hasDiag = false;
+    rdp_log_reset();
     s->thread = CreateThread(NULL, 0, session_thread, s, 0, NULL);
     return s->thread != NULL;
 }

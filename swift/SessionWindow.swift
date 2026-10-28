@@ -29,7 +29,11 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, Conne
     private let reconnectButton = NSButton(title: "Reconnect", target: nil, action: nil)
     private let closeButton = NSButton(title: "Close", target: nil, action: nil)
     private let passwordButton = NSButton(title: "Enter password", target: nil, action: nil)
-    private let logButton = NSButton(title: "Show Log", target: nil, action: nil)
+    private let detailsButton = NSButton(title: "Copy Details", target: nil, action: nil)
+    /// The steps of the connection with how far it got, under the reason.
+    private let overlaySteps = NSTextField(labelWithString: "")
+    /// Which password "Enter password" asks for.
+    private var passwordFor: ConnectionFailure.Login = .server
     private var resizeWork: DispatchWorkItem?
     private var retriedWithoutDynamic = false
     private var closing = false
@@ -97,13 +101,15 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, Conne
         closeButton.action = #selector(closeWindow)
         passwordButton.target = self
         passwordButton.action = #selector(enterPassword)
-        logButton.target = self
-        logButton.action = #selector(showLog)
-        logButton.toolTip = "Shows app.log and freerdp.log in Finder"
+        detailsButton.target = self
+        detailsButton.action = #selector(copyDetails)
+        detailsButton.toolTip = "Copies what went wrong, with the technical details, to send to whoever manages the server"
+        overlaySteps.font = .systemFont(ofSize: 12)
+        overlaySteps.maximumNumberOfLines = 0
 
-        let buttons = NSStackView(views: [logButton, closeButton, passwordButton, reconnectButton])
+        let buttons = NSStackView(views: [detailsButton, closeButton, passwordButton, reconnectButton])
         let header = NSStackView(views: [spinner, overlayTitle])
-        let stack = NSStackView(views: [header, overlayDetail, buttons])
+        let stack = NSStackView(views: [header, overlayDetail, overlaySteps, buttons])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 10
@@ -176,16 +182,32 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, Conne
 
     @objc private func closeWindow() { window?.performClose(nil) }
 
-    @objc private func showLog() { AppLog.reveal() }
+    /// The failure shown, for Copy Details.
+    private var previewFailure: ConnectionFailure?
+
+    @objc private func copyDetails() {
+        guard let technical = (connection?.failure ?? previewFailure)?.technical else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(technical, forType: .string)
+        detailsButton.title = "Copied"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.detailsButton.title = "Copy Details" }
+    }
 
     /// For a rejected login: asks again, saves the new password and reconnects.
     @objc private func enterPassword() {
         guard let window else { return }
-        PasswordSheet.present(on: window, title: "Password for \(server.display)") { [weak self] entered, save in
+        // The gateway's own account when it has one and its sign-in failed.
+        let gatewayAccount = passwordFor == .gateway ? self.gatewayAccount : nil
+        let account = gatewayAccount ?? server
+        PasswordSheet.present(on: window, title: "Password for \(account.display)") { [weak self] entered, save in
             guard let self, let entered else { return }
-            self.password = entered
-            if self.gatewayAccount == nil { self.gatewayPassword = nil }
-            let key = self.server.keychainKey
+            if gatewayAccount != nil {
+                self.gatewayPassword = entered
+            } else {
+                self.password = entered
+                if self.gatewayAccount == nil { self.gatewayPassword = nil }
+            }
+            let key = account.keychainKey
             Task {
                 if save { _ = await Keychain.setPasswordAsync(entered, for: key) }
                 await MainActor.run { self.connect() }
@@ -193,8 +215,12 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, Conne
         }
     }
 
-    private func showOverlay(title: String, detail: String, busy: Bool, actions: Bool, askPassword: Bool = false) {
+    private func showOverlay(title: String, detail: String, busy: Bool, actions: Bool, askPassword: Bool = false,
+                             steps: [(title: String, status: ConnectionFailure.Status)] = [], details: Bool = false) {
         passwordButton.isHidden = !askPassword
+        overlaySteps.attributedStringValue = Self.stepsText(steps)
+        overlaySteps.isHidden = steps.isEmpty
+        detailsButton.isHidden = !details
         overlay.isHidden = false
         overlayTitle.stringValue = title
         overlayDetail.stringValue = detail
@@ -203,7 +229,6 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, Conne
         if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         reconnectButton.isHidden = !actions
         closeButton.isHidden = !actions
-        logButton.isHidden = !actions
     }
 
     // MARK: ConnectionDelegate
@@ -248,11 +273,33 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate, Conne
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.connect() }
                 return
             }
-            let login = ["ERRCONNECT_LOGON_FAILURE", "ERRCONNECT_WRONG_PASSWORD",
-                         "ERRCONNECT_AUTHENTICATION_FAILED", "ERRCONNECT_NO_OR_MISSING_CREDENTIALS"].contains(code)
-            showOverlay(title: "Could not connect", detail: ConnectError.explain(code), busy: false,
-                        actions: true, askPassword: login)
+            show(connection?.failure ?? ConnectionFailure.plain(code: code))
         }
+    }
+
+    /// The overlay for a failed connection. Also used to preview one.
+    func show(_ failure: ConnectionFailure) {
+        previewFailure = failure
+        passwordFor = failure.login ?? .server
+        showOverlay(title: failure.headline, detail: failure.detail, busy: false, actions: true,
+                    askPassword: failure.login != nil, steps: failure.steps, details: true)
+    }
+
+    /// One line per step: done, failed, or not reached.
+    private static func stepsText(_ steps: [(title: String, status: ConnectionFailure.Status)]) -> NSAttributedString {
+        let text = NSMutableAttributedString()
+        for (i, step) in steps.enumerated() {
+            let (mark, color): (String, NSColor) = switch step.status {
+            case .done: ("✓", .secondaryLabelColor)
+            case .failed: ("✗", .systemRed)
+            case .notReached: ("·", .tertiaryLabelColor)
+            }
+            let weight: NSFont.Weight = step.status == .failed ? .semibold : .regular
+            text.append(NSAttributedString(string: "\(mark)  \(step.title)" + (i < steps.count - 1 ? "\n" : ""),
+                                           attributes: [.foregroundColor: color,
+                                                        .font: NSFont.systemFont(ofSize: 12, weight: weight)]))
+        }
+        return text
     }
 
     func connection(_ connection: Connection, didDisplay surface: IOSurface, size: CGSize) {

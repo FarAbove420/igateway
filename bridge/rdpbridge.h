@@ -160,6 +160,47 @@ uint16_t rdp_wheel_flags(bool horizontal, int step);
 void rdp_session_send_xbutton(RDPSession *session, int button, bool down, uint16_t x, uint16_t y);
 void rdp_session_send_key(RDPSession *session, uint16_t scancode, bool down, bool repeat);
 
+/// How far FreeRDP's connection sequence got, coarsely.
+typedef enum {
+    RDPStageTransport = 0,   ///< network, TLS, gateway tunnel
+    RDPStageLogin,           ///< NLA (or Azure AD) sign-in to the server
+    RDPStageSetup,           ///< MCS and security settings
+    RDPStageLicensing,
+    RDPStageActivation,      ///< capabilities and finalization
+    RDPStageActive
+} RDPStage;
+
+/// Where a failed connection got to, gathered from FreeRDP's state and its own
+/// log while it ran, so the app can say which step failed.
+typedef struct {
+    /// freerdp_get_last_error.
+    uint32_t errorCode;
+    /// CONNECTION_STATE when it ended, -1 if unknown, and as a stage and name.
+    int32_t connectionState;
+    RDPStage stage;
+    char stateName[64];
+    char errorName[96];
+    /// Furthest gateway tunnel step reached (FreeRDP's TSG states): -1 none,
+    /// 0 started, 1 signed in, 2 allowed by policy, 3 server reached, 4 ready.
+    int32_t gatewayProgress;
+    /// The gateway's own reason code (E_PROXY_*), 0 if none.
+    uint32_t gatewayReason;
+    /// An authentication error was logged, and how far the gateway was then.
+    bool authError;
+    int32_t authErrorProgress;
+    /// The last few error lines from FreeRDP's log, for "Copy Details".
+    char details[1200];
+} RDPDiagnosis;
+
+/// Routes FreeRDP's log through the bridge: written to <directory>/freerdp.log
+/// as before, and read along for the diagnosis. Once, before anything else.
+void rdp_log_init(const char *directory);
+/// The diagnosis saved when the session failed, or the current one.
+bool rdp_session_diagnosis(RDPSession *session, RDPDiagnosis *out);
+/// Only what the log showed, without a session. For tests.
+void rdp_log_diagnosis(RDPDiagnosis *out);
+void rdp_log_reset(void);
+
 /// Sets Windows' lock keys to the given states (MS-RDPBCGR synchronize event),
 /// so Caps Lock in Windows matches the Mac's.
 void rdp_session_send_locks(RDPSession *session, bool capsLock, bool numLock);

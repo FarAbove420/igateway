@@ -92,6 +92,27 @@ shows as ended. Windows' "ended on purpose" reasons (signed out, disconnected
 from the Start menu, taken over by another connection, idle timeout) count as
 a normal close.
 
+## When a connection fails
+
+FreeRDP's final error code often names the wrong step: a rejected gateway
+login can surface as "security negotiation failed". So the bridge routes
+FreeRDP's log through a callback (still written to `freerdp.log`) and reads
+along:
+
+- the gateway tunnel's state changes, which FreeRDP logs as
+  `TSG_STATE_X -> TSG_STATE_Y`: started, signed in, allowed by policy, server
+  reached, ready;
+- the gateway's own reason codes (`E_PROXY_*`), such as "not allowed to that
+  server" or "couldn't reach the server";
+- sign-in errors, with how far the gateway was at that moment.
+
+At the failure it adds FreeRDP's connection state and error code.
+`swift/Failure.swift` turns that into one step that failed (reach the gateway,
+sign in to it, its policy, the gateway reaching the server, sign in to the
+server, start the session) and a plain sentence. The window shows the steps
+with what succeeded; Copy Details puts the technical summary on the
+clipboard.
+
 ## Certificates
 
 FreeRDP checks a certificate with OpenSSL against `/etc/ssl/cert.pem` and

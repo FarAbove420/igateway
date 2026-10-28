@@ -348,6 +348,83 @@ if let frame = encodeRedFrame(width: 64, height: 64) {
     print("  skip  no H.264 encoder on this Mac to make a test frame")
 }
 
+// MARK: What failed
+print("== What failed")
+func diagnosis(_ code: String = "", stage: RDPStage = RDPStageTransport, progress: Int32 = -1,
+               reason: UInt32 = 0, authAt: Int32? = nil) -> RDPDiagnosis {
+    var d = RDPDiagnosis()
+    d.stage = stage
+    d.gatewayProgress = progress
+    d.gatewayReason = reason
+    d.authError = authAt != nil
+    d.authErrorProgress = authAt ?? -1
+    return d
+}
+let viaGW = Gateway(name: "", host: "rdg.example.com", transport: .rpc)
+let directGW = Gateway()
+let failingHost = Host(address: "192.0.2.10", label: "files")
+func failure(_ d: RDPDiagnosis, _ code: String, _ gw: Gateway = viaGW, refused: CertificateInfo? = nil) -> ConnectionFailure {
+    ConnectionFailure.diagnose(d, code: code, host: failingHost, gateway: gw, refused: refused)
+}
+var f = failure(diagnosis(), "ERRCONNECT_DNS_NAME_NOT_FOUND")
+check("gateway name not found", f.failedStep == .reachGateway && f.headline == "Couldn't find rdg.example.com", f.headline)
+f = failure(diagnosis(), "ERRCONNECT_CONNECT_FAILED")
+check("gateway not answering", f.failedStep == .reachGateway && f.headline == "Couldn't reach the gateway", f.headline)
+f = failure(diagnosis(authAt: -1), "ERRCONNECT_SECURITY_NEGO_CONNECT_FAILED")
+check("a sign-in error before the tunnel is the gateway's sign-in, not 'security negotiation'",
+      f.failedStep == .gatewayLogin && f.login == .gateway, "\(String(describing: f.failedStep)) \(f.headline)")
+f = failure(diagnosis(), "ERRCONNECT_ACCESS_DENIED")
+check("gateway rejects the password", f.failedStep == .gatewayLogin && f.detail.contains("rejected"), f.detail)
+f = failure(diagnosis(progress: 1), "ERRCONNECT_CONNECT_TRANSPORT_FAILED")
+check("signed in but the gateway's policy says no", f.failedStep == .gatewayPolicy, "\(String(describing: f.failedStep))")
+f = failure(diagnosis(progress: 2), "ERRCONNECT_CONNECT_TRANSPORT_FAILED")
+check("allowed but the gateway can't reach the server", f.failedStep == .gatewayToServer && f.headline.contains("files"), f.headline)
+f = failure(diagnosis(progress: 2, reason: 0x800759DD), "ERRCONNECT_CONNECT_TRANSPORT_FAILED")
+check("the gateway's own reason wins: server unreachable", f.failedStep == .gatewayToServer && f.detail.contains("may be off"), f.detail)
+f = failure(diagnosis(progress: 1, reason: 0x800759DA), "")
+check("the gateway's own reason: not allowed to that server", f.failedStep == .gatewayPolicy && f.headline == "Not allowed to this server", f.headline)
+f = failure(diagnosis("x", stage: RDPStageLogin, progress: 4), "ERRCONNECT_LOGON_FAILURE")
+check("through a ready tunnel, a rejected login is the server's", f.failedStep == .serverLogin && f.login == .server, "\(String(describing: f.failedStep))")
+f = failure(diagnosis(stage: RDPStageLicensing, progress: 4), "ERRCONNECT_CONNECT_TRANSPORT_FAILED")
+check("licensing", f.failedStep == .sessionStart && f.headline == "No remote desktop license", f.headline)
+f = failure(diagnosis(), "ERRCONNECT_CONNECT_FAILED", directGW)
+check("direct: nothing answers", f.failedStep == .reachServer && f.headline == "Couldn't reach files", f.headline)
+let refusedCert = """
+-----BEGIN CERTIFICATE-----
+MIIB
+-----END CERTIFICATE-----
+""".withCString { p in "rdg.example.com".withCString { h in
+    CertificateInfo(RDPCertificate(host: h, port: 443, commonName: h, subject: h, issuer: h, fingerprint: p, isPEM: true,
+                                   gateway: true, changed: false, mismatch: false, oldSubject: nil, oldIssuer: nil,
+                                   oldFingerprint: nil, oldIsPEM: false)) } }
+f = failure(diagnosis(), "ERRCONNECT_TLS_CONNECT_FAILED", refused: refusedCert)
+check("a refused certificate is said as such", f.failedStep == .reachGateway && f.headline == "Certificate not trusted", f.headline)
+f = failure(diagnosis(progress: 2), "ERRCONNECT_CONNECT_TRANSPORT_FAILED")
+check("steps before the failed one are done, after it not reached",
+      f.steps.map(\.status) == [.done, .done, .done, .failed, .notReached, .notReached], "\(f.steps.map(\.status))")
+
+print("== Reading FreeRDP's log")
+let logDir = FileManager.default.temporaryDirectory.appendingPathComponent("igateway-log-\(getpid())")
+try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+rdp_log_init(logDir.path)
+rdp_log_reset()
+shim_log("com.freerdp.core.gateway.tsg", 1, "TSG_STATE_INITIAL -> TSG_STATE_CONNECTED")   // WLOG_DEBUG
+shim_log("com.freerdp.core.gateway.tsg", 1, "TSG_STATE_CONNECTED -> TSG_STATE_AUTHORIZED")
+shim_log("com.freerdp.core.gateway.tsg", 4, "TsProxyCreateChannel failed: E_PROXY_TS_CONNECTFAILED")   // WLOG_ERROR
+var collected = RDPDiagnosis()
+rdp_log_diagnosis(&collected)
+check("the gateway's furthest step is read from its state changes", collected.gatewayProgress == 2, "\(collected.gatewayProgress)")
+check("the gateway's reason code is picked out", collected.gatewayReason == 0x800759DD, String(collected.gatewayReason, radix: 16))
+shim_log("com.freerdp.core.auth", 4, "credssp_auth_authenticate status SEC_E_LOGON_DENIED")
+rdp_log_diagnosis(&collected)
+check("a sign-in error is noted with how far the gateway was", collected.authError && collected.authErrorProgress == 2)
+let written = (try? String(contentsOf: logDir.appendingPathComponent("freerdp.log"), encoding: .utf8)) ?? ""
+check("errors still go to freerdp.log, the debug state lines don't",
+      written.contains("E_PROXY_TS_CONNECTFAILED") && !written.contains("TSG_STATE_CONNECTED -> "), written)
+rdp_log_reset()
+rdp_log_diagnosis(&collected)
+check("a new connection starts from nothing", collected.gatewayProgress == -1 && !collected.authError)
+
 // MARK: Certificates
 print("== Certificates")
 // A throwaway self-signed certificate; its SHA-256 checked with: openssl x509 -fingerprint -sha256

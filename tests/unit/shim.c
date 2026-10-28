@@ -52,3 +52,9 @@ int shim_rc4(const uint8_t *key, size_t keyLength, const uint8_t *data, size_t l
   winpr_RC4_Free(rc4);
   return ok ? 1 : 0;
 }
+
+#include <winpr/wlog.h>
+/* Logs a line the way FreeRDP code does, under the given tag. */
+void shim_log(const char *tag, unsigned level, const char *text) {
+  WLog_Print(WLog_Get(tag), level, "%s", text);
+}

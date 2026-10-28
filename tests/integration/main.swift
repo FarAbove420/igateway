@@ -27,6 +27,7 @@ settings.sound = true
 settings.shareFolder = true
 settings.sharedFolderPath = CommandLine.arguments[1]
 let host = Host(address: "127.0.0.1:13389", label: "local test")
+rdp_log_init(CommandLine.arguments[1])
 let probe = Probe()
 let direct = Gateway()                     // never touch a real gateway from a test
 let connection = Connection(host: host, gateway: direct, server: Account(username: "t", domain: ""), gatewayAccount: nil,
@@ -70,5 +71,25 @@ if let s = probe.lastSurface {
 connection.disconnect()
 RunLoop.main.run(until: Date().addingTimeInterval(3))
 check("disconnects cleanly", probe.states.last == "disconnected" && !connection.isActive)
+// Two connections that fail for real, to see the steps named right.
+func fails(_ address: String) -> ConnectionFailure? {
+    let c = Connection(host: Host(address: address, label: ""), gateway: Gateway(),
+                       server: Account(username: "t", domain: ""), gatewayAccount: nil,
+                       settings: settings, useDynamicResolution: false)
+    c.securityProtocol = "tls"
+    c.delegate = probe
+    c.connect(pixelSize: CGSize(width: 800, height: 600), scale: 100, password: "t", gatewayPassword: nil)
+    let begin = Date()
+    while Date().timeIntervalSince(begin) < 15 {
+        if case .failed = c.state { break }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+    return c.failure
+}
+let closed = fails("127.0.0.1:13399")
+check("a closed port is 'couldn't reach'", closed?.failedStep == .reachServer, closed?.headline ?? "no failure")
+let unknown = fails("nonexistent.invalid")
+check("an unknown name is 'couldn't find'", unknown?.headline == "Couldn't find nonexistent.invalid", unknown?.headline ?? "no failure")
+
 print("\n\(passed) passed, \(failed) failed")
 exit(failed == 0 ? 0 : 1)

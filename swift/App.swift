@@ -219,13 +219,10 @@ func installMainMenu(target: MenuTarget) {
 @main
 enum Main {
     static func main() {
-        // FreeRDP logs to a file instead of a console nobody sees. These are
-        // WinPR's own variables (WLOG_* in libwinpr3).
+        // FreeRDP's log goes through the bridge: into freerdp.log, and read
+        // along to tell which step of a failed connection went wrong.
         try? FileManager.default.createDirectory(at: Store.logDirectory, withIntermediateDirectories: true)
-        setenv("WLOG_APPENDER", "FILE", 1)
-        setenv("WLOG_FILEAPPENDER_OUTPUT_FILE_PATH", Store.logDirectory.path, 1)
-        setenv("WLOG_FILEAPPENDER_OUTPUT_FILE_NAME", "freerdp.log", 1)
-        setenv("WLOG_LEVEL", "INFO", 1)
+        rdp_log_init(Store.logDirectory.path)
         // A session process that dies before reading its pipe must not take
         // the main app down with it.
         signal(SIGPIPE, SIG_IGN)

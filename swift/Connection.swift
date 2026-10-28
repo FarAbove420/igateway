@@ -163,6 +163,10 @@ final class Connection: InputSink {
     private var historyID: UUID?
     /// Why Windows ended the session, when it did so on purpose.
     private(set) var endReason: String?
+    /// Which step failed and why, once the connection failed.
+    private(set) var failure: ConnectionFailure?
+    /// A certificate the user chose not to trust in this attempt.
+    private var refusedCertificate: CertificateInfo?
     private(set) var remoteSize: CGSize = .zero
     let clipboard: ClipboardSync
 
@@ -276,6 +280,7 @@ final class Connection: InputSink {
 
     private func fail(code: String) {
         AppLog.write("\(host.display): could not start \(code.isEmpty ? "(no error code)" : code)")
+        failure = ConnectionFailure.plain(code: code)
         state = .failed(code: code)
         record(state)
         delegate?.connection(self, didChange: state)
@@ -300,7 +305,7 @@ final class Connection: InputSink {
             case .failed(let code):
                 entry.state = .failed
                 entry.ended = Date()
-                entry.detail = ConnectError.explain(code)
+                entry.detail = failure?.headline ?? ConnectError.explain(code)
             case .idle:
                 break
             }
@@ -480,6 +485,7 @@ final class Connection: InputSink {
             DispatchQueue.main.async {
                 guard let delegate = me.delegate else { decided.signal(); return }
                 delegate.connection(me, verify: info) { decision in
+                    if decision == .refuse { me.refusedCertificate = info }
                     answer.value = decision
                     decided.signal()
                 }
@@ -521,7 +527,16 @@ final class Connection: InputSink {
         if newState == state { return }
         state = newState
         switch newState {
-        case .failed(let code): AppLog.write("\(host.display): failed \(code.isEmpty ? "(no error code)" : code)")
+        case .failed(let code):
+            var diagnosis = RDPDiagnosis()
+            if let session, rdp_session_diagnosis(session, &diagnosis) {
+                failure = ConnectionFailure.diagnose(diagnosis, code: code, host: host, gateway: gateway,
+                                                     refused: refusedCertificate)
+            } else {
+                failure = ConnectionFailure.plain(code: code)
+            }
+            AppLog.write("\(host.display): failed \(code.isEmpty ? "(no error code)" : code): "
+                         + "\(failure?.headline ?? ""), step \(failure?.failedStep.map { "\($0)" } ?? "unknown")")
         default: AppLog.write("\(host.display): \(newState)")
         }
         record(newState)
