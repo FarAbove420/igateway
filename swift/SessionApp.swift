@@ -5,11 +5,14 @@
 //  every server gets its own Dock tile, Cmd-Tab entry and Mission Control
 //  name.
 //
-//  The bundle is an Info.plist named after the host plus a hard link to this
-//  app's executable. Not a symlink: LaunchServices resolves a symlink back to
-//  the main app and shows its name instead (tested). The hard link also means
-//  a tile kept in the Dock opens that host directly, using saved passwords.
-//  Passwords go to the session process over a pipe, never on the command line.
+//  The bundle is an Info.plist named after the host plus a copy of this app's
+//  executable, signed ad hoc for that bundle. Not a link: with the main app's
+//  signature the bundle's own Info.plist breaks it, and macOS then refuses the
+//  session the Desktop and Documents folders without asking. Not a symlink
+//  either: LaunchServices resolves one back to the main app and shows its name
+//  instead (tested). A tile kept in the Dock opens that host directly, using
+//  saved passwords. Passwords go to the session process over a pipe, never on
+//  the command line.
 //
 
 import AppKit
@@ -18,6 +21,8 @@ enum SessionBundle {
     /// Info.plist keys that make the executable run as one session.
     static let hostKey = "iGatewayHostID"
     static let appKey = "iGatewayApp"
+    /// File number of the main app's executable the bundle was built from.
+    static let buildKey = "iGatewayBuild"
 
     static var directory: URL { Store.directory.appendingPathComponent("Sessions.noindex", isDirectory: true) }
 
@@ -101,10 +106,12 @@ enum SessionBundle {
     }
 
     /// True when this session process runs an older build than the installed
-    /// app: its bundle still links the executable from before an update.
+    /// app: its bundle still holds the executable from before an update. Read
+    /// from disk, so it turns false once the bundle has been rebuilt.
     static var runningStaleBuild: Bool {
         guard Bundle.main !== mainApp, let current = inode(mainApp.executablePath) else { return false }
-        return inode(Bundle.main.executablePath) != current
+        let info = NSDictionary(contentsOf: Bundle.main.bundleURL.appendingPathComponent("Contents/Info.plist"))
+        return info?[buildKey] as? String != String(current)
     }
 
     /// Relinks the bundles of hosts that aren't open, so tiles kept in the Dock
@@ -149,15 +156,29 @@ enum SessionBundle {
                 "NSHighResolutionCapable": true,
                 hostKey: host.id.uuidString,
                 appKey: app.bundlePath,
+                buildKey: inode(executable.path).map(String.init) ?? "",
             ]
             // Sessions show a PC, the main app an apple.
             let icon = app.url(forResource: "SessionIcon", withExtension: "icns")
                 ?? app.url(forResource: "AppIcon", withExtension: "icns")
             if icon != nil { info["CFBundleIconFile"] = "AppIcon" }
+            let infoURL = contents.appendingPathComponent("Info.plist")
+            let target = macOS.appendingPathComponent(executable.lastPathComponent)
+            // Built from this app with these settings already: signing it
+            // again would only slow down every connect.
+            if NSDictionary(contentsOf: infoURL) == NSDictionary(dictionary: info),
+               fm.fileExists(atPath: target.path),
+               fm.fileExists(atPath: contents.appendingPathComponent("_CodeSignature").path) {
+                return bundle
+            }
             let plist = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
-            try plist.write(to: contents.appendingPathComponent("Info.plist"), options: .atomic)
-            try link(executable, to: macOS.appendingPathComponent(executable.lastPathComponent))
+            try plist.write(to: infoURL, options: .atomic)
+            // Replacing the executable of a running session is safe: the
+            // running process keeps its own copy.
+            try? fm.removeItem(at: target)
+            try fm.copyItem(at: executable, to: target)
             if let icon { try? link(icon, to: resources.appendingPathComponent("AppIcon.icns")) }
+            sign(bundle, host: host)
             // A new date makes macOS reread the bundle and its icon.
             try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
             return bundle
@@ -167,9 +188,30 @@ enum SessionBundle {
         }
     }
 
-    /// Hard link, falling back to a symlink, which still names the Dock tile
-    /// for sessions started from here. Replacing the link of a running
-    /// session is safe: the running process keeps its own copy.
+    /// Ad-hoc signature for the bundle as it is now, so macOS asks before a
+    /// session reads Desktop or Documents instead of refusing it.
+    private static func sign(_ bundle: URL, host: Host) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        task.arguments = ["--force", "--sign", "-", bundle.path]
+        task.standardOutput = FileHandle.nullDevice
+        let errors = Pipe()
+        task.standardError = errors
+        do {
+            try task.run()
+            let message = errors.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
+            if task.terminationStatus != 0 {
+                AppLog.write("\(host.display): could not sign its session app: "
+                             + String(decoding: message, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        } catch {
+            AppLog.write("\(host.display): could not sign its session app: \(error.localizedDescription)")
+        }
+    }
+
+    /// Hard link, falling back to a symlink. Only for the icon: the
+    /// executable needs its own copy to carry its own signature.
     private static func link(_ source: URL, to target: URL) throws {
         let fm = FileManager.default
         try? fm.removeItem(at: target)

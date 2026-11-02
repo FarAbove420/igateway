@@ -58,11 +58,16 @@ the list lacks.
 macOS gives each running app one Dock tile, so each session runs as its own
 process from a small bundle per server in `Sessions.noindex/<id>/<name>.app`
 (`.noindex` keeps them out of Spotlight). The bundle is an `Info.plist` with
-the server's name, its own bundle id and the server's id, plus a hard link to
-the app's executable, so nothing is copied. It is rebuilt on every connect and
-removed when its server is.
+the server's name, its own bundle id and the server's id, plus a copy of the
+app's executable, signed ad hoc for that bundle. It is rebuilt when the app or
+the server's name changes, and removed when its server is.
 
-A hard link and not a symlink: a symlinked executable started by LaunchServices
+A signed copy and not a link: the main app's signature covers its own
+`Info.plist`, so a link in a bundle with a different one has a broken
+signature, and macOS then refuses the session the Desktop, Documents and
+Downloads folders without asking. That shows up in Windows as an empty shared
+folder and "The device is not connected". With its own signature, macOS asks
+instead. A symlink doesn't work either: one started by LaunchServices
 resolves back to the main bundle and shows the main app's name. A tile kept in
 the Dock starts through LaunchServices.
 

@@ -20,8 +20,18 @@ check("host id key present", info[SessionBundle.hostKey] as? String == host.id.u
 let exe = bundle.appendingPathComponent("Contents/MacOS/\(Bundle.main.executableURL!.lastPathComponent)")
 let a = try! FileManager.default.attributesOfItem(atPath: exe.path)
 let b = try! FileManager.default.attributesOfItem(atPath: Bundle.main.executableURL!.resolvingSymlinksInPath().path)
-check("executable is a hard link, not a copy or symlink",
-      a[.type] as? FileAttributeType == .typeRegular && (a[.systemFileNumber] as? Int) == (b[.systemFileNumber] as? Int))
+check("executable is its own copy, not a link",
+      a[.type] as? FileAttributeType == .typeRegular && (a[.systemFileNumber] as? Int) != (b[.systemFileNumber] as? Int))
+let verify = Process()
+verify.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+verify.arguments = ["--verify", "--strict", bundle.path]
+verify.standardError = FileHandle.nullDevice
+try! verify.run(); verify.waitUntilExit()
+check("its signature is valid for this bundle", verify.terminationStatus == 0)
+_ = SessionBundle.make(for: host)
+let again = try! FileManager.default.attributesOfItem(atPath: exe.path)
+check("an unchanged host isn't copied and signed again",
+      (again[.systemFileNumber] as? Int) == (a[.systemFileNumber] as? Int))
 
 var renamed = host
 renamed.label = "printserver"
