@@ -27,25 +27,61 @@ but it behaves like a Mac app.
 
 ## Install
 
-Runs on macOS 13 or later on an Apple Silicon Mac. Building needs the Xcode
-Command Line Tools with the macOS 14 SDK or later (`xcode-select --install`).
-No Homebrew.
+You build it yourself. It runs on an Apple Silicon Mac with macOS 13 or
+later. No Homebrew needed.
+
+1. Install the Xcode Command Line Tools, if you don't have them yet. They
+   bring git and the compilers, and need the macOS 14 SDK or later.
+
+   ```bash
+   xcode-select --install
+   ```
+
+2. Get the code.
+
+   ```bash
+   git clone https://github.com/FarAbove420/igateway.git
+   cd igateway
+   ```
+
+3. Build FreeRDP, OpenSSL and FFmpeg's H.264 decoder. This downloads them,
+   checks each against a pinned SHA-256 and builds them into `deps/out`. It
+   takes a few minutes and only has to run once.
+
+   ```bash
+   ./deps/build-deps.zsh
+   ```
+
+4. Build the app and install it.
+
+   ```bash
+   ./build.zsh --install
+   ```
+
+5. Open iGateway.exe from `~/Applications`, the Applications folder inside
+   your home folder (not the main one).
+
+### Update
+
+Quit iGateway first, then in the `igateway` folder:
 
 ```bash
+git pull
 ./deps/build-deps.zsh
 ./build.zsh --install
 ```
 
-The first command downloads FreeRDP, OpenSSL and FFmpeg's H.264 decoder,
-checks each against a pinned SHA-256 and builds them. It takes about a
-minute and only has to run once. The second builds the app and puts it in
-`~/Applications`.
+`build-deps.zsh` only rebuilds what changed.
 
 ## Your data
 
 - Servers and settings: `~/Library/Application Support/iGateway/config.json`
 - Passwords: your login Keychain, only when you choose to save them
 - Logs: `~/Library/Logs/iGateway`, or Window, Show Logs. Never passwords.
+
+To remove iGateway, delete the app, those two folders and
+`~/Library/Caches/iGateway`. Saved passwords are in Keychain Access under
+"iGateway.exe".
 
 ## Limits
 
