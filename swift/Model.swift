@@ -18,11 +18,26 @@ struct Host: Codable, Hashable, Identifiable {
     var dockLabel = ""
     /// The label's colour as "#RRGGBB" (sRGB). Empty means the default.
     var labelColor = ""
+    var kind: HostKind = .rdp
+    /// SSH only: the user to log in as. Empty is the Mac's own user name.
+    var sshUser = ""
+    /// SSH only. nil is ssh's own default (22, or what ~/.ssh/config says).
+    var port: Int?
+    var sshAuth: SSHAuth = .key
+    /// SSH only: a private key file. Empty lets ssh pick, from the agent or
+    /// ~/.ssh/config. Never exported: a path means nothing on another Mac.
+    var identityFile = ""
+    /// SSH only: "[user@]server[:port]" to go through first. Hosts with the
+    /// same jump host are grouped under it in the sidebar.
+    var jumpHost = ""
 
     var title: String { label.isEmpty ? address : label }
     var display: String { label.isEmpty ? address : "\(label) (\(address))" }
+    var isSSH: Bool { kind == .ssh }
 
-    enum CodingKeys: String, CodingKey { case id, address, label, gatewayID, dockLabel, labelColor }
+    enum CodingKeys: String, CodingKey {
+        case id, address, label, gatewayID, dockLabel, labelColor, kind, sshUser, port, sshAuth, identityFile, jumpHost
+    }
 
     init(address: String, label: String, gatewayID: UUID? = nil, dockLabel: String = "", labelColor: String = "") {
         self.address = address
@@ -40,6 +55,187 @@ struct Host: Codable, Hashable, Identifiable {
         gatewayID = c.value(.gatewayID, or: nil)
         dockLabel = c.value(.dockLabel, or: "")
         labelColor = c.value(.labelColor, or: "")
+        kind = c.value(.kind, or: .rdp)
+        sshUser = c.value(.sshUser, or: "")
+        port = c.value(.port, or: nil)
+        sshAuth = c.value(.sshAuth, or: .key)
+        identityFile = c.value(.identityFile, or: "")
+        jumpHost = c.value(.jumpHost, or: "")
+    }
+}
+
+enum HostKind: String, Codable { case rdp, ssh }
+
+/// Monospaced fonts every Mac has.
+enum TerminalFont: String, Codable, CaseIterable {
+    case sfMono, menlo, monaco, courierNew, andaleMono, ptMono
+
+    var label: String {
+        switch self {
+        case .sfMono: return "SF Mono"
+        case .menlo: return "Menlo"
+        case .monaco: return "Monaco"
+        case .courierNew: return "Courier New"
+        case .andaleMono: return "Andale Mono"
+        case .ptMono: return "PT Mono"
+        }
+    }
+
+    /// PostScript name; SF Mono is the system's own monospaced font.
+    var postScriptName: String? {
+        switch self {
+        case .sfMono: return nil
+        case .menlo: return "Menlo-Regular"
+        case .monaco: return "Monaco"
+        case .courierNew: return "CourierNewPSMT"
+        case .andaleMono: return "AndaleMono"
+        case .ptMono: return "PTMono-Regular"
+        }
+    }
+}
+
+/// How an SSH host signs in. With .password, ssh asks through iGateway's
+/// password helper (Askpass.swift), which can use one saved in the Keychain.
+enum SSHAuth: String, Codable { case key, password }
+
+/// The command an SSH session runs: the Mac's own ssh, with options that
+/// ~/.ssh/config can't loosen (options on the command line win).
+enum SSHCommand {
+    /// A var only so the tests can run a stand-in.
+    static var executable = "/usr/bin/ssh"
+
+    enum Problem: Error, Equatable { case address, user, port, identityFile, jump }
+
+    /// Who logs in where: the host itself, or its jump host.
+    struct Login: Equatable {
+        var user: String
+        var address: String
+        var port: Int?
+
+        /// "[user@]address[:port]", with brackets around an IPv6 address.
+        var spec: String {
+            let host = address.contains(":") ? "[\(address)]" : address
+            return (user.isEmpty ? "" : "\(user)@") + host + (port.map { ":\($0)" } ?? "")
+        }
+
+        /// The user ssh logs in as when none is given: the Mac's own.
+        var effectiveUser: String { user.isEmpty ? NSUserName() : user }
+
+        /// Where a saved password lives in the Keychain.
+        var keychainKey: String { "ssh:\(effectiveUser)@\(address):\(port ?? 22)" }
+    }
+
+    static func login(for host: Host) -> Login {
+        Login(user: host.sshUser.trimmingCharacters(in: .whitespaces),
+              address: host.address.trimmingCharacters(in: .whitespaces), port: host.port)
+    }
+
+    /// "[user@]server[:port]", or "[user@][IPv6]:port". nil when empty; one
+    /// hop only.
+    static func jump(_ text: String) throws -> Login? {
+        let s = text.trimmingCharacters(in: .whitespaces)
+        if s.isEmpty { return nil }
+        var user = ""
+        var rest = Substring(s)
+        if let at = s.lastIndex(of: "@") {
+            user = String(s[..<at])
+            rest = s[s.index(after: at)...]
+        }
+        var address = String(rest)
+        var port: Int?
+        if rest.hasPrefix("[") {
+            guard let close = rest.firstIndex(of: "]") else { throw Problem.jump }
+            address = String(rest[rest.index(after: rest.startIndex)..<close])
+            let after = rest[rest.index(after: close)...]
+            if !after.isEmpty {
+                guard after.hasPrefix(":"), let p = Int(after.dropFirst()) else { throw Problem.jump }
+                port = p
+            }
+        } else if rest.filter({ $0 == ":" }).count == 1, let colon = rest.firstIndex(of: ":") {
+            address = String(rest[..<colon])
+            guard let p = Int(rest[rest.index(after: colon)...]) else { throw Problem.jump }
+            port = p
+        }
+        guard isValidAddress(address), isValidUser(user), port.map({ (1...65535).contains($0) }) ?? true
+        else { throw Problem.jump }
+        return Login(user: user, address: address, port: port)
+    }
+
+    /// Host names, IPv4 and IPv6 addresses only. Nothing that starts with a
+    /// dash, so it can never be read as an option, and no spaces or control
+    /// characters.
+    static func isValidAddress(_ s: String) -> Bool {
+        !s.isEmpty && s.count <= 253 && !s.hasPrefix("-")
+            && s.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) || ".-_:%".unicodeScalars.contains($0) }
+            && s.unicodeScalars.allSatisfy(\.isASCII)
+    }
+
+    /// Also DOMAIN\user and user@domain, for Windows' OpenSSH server.
+    static func isValidUser(_ s: String) -> Bool {
+        s.isEmpty || (s.count <= 64 && !s.hasPrefix("-") && s.unicodeScalars.allSatisfy {
+            $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "._-\\@".unicodeScalars.contains($0))
+        })
+    }
+
+    /// What both legs get, the host's and its jump host's: the locked-down
+    /// options and the sign-in.
+    private static func options(for host: Host) throws -> [String] {
+        var args = ["-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "StrictHostKeyChecking=ask"]
+        if host.sshAuth == .key {
+            // A fake server can't ask for a password ssh won't give.
+            args += ["-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"]
+            if !host.identityFile.isEmpty {
+                guard host.identityFile.hasPrefix("/"),
+                      !host.identityFile.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+                else { throw Problem.identityFile }
+                args += ["-i", host.identityFile, "-o", "IdentitiesOnly=yes"]
+            }
+        }
+        return args
+    }
+
+    static func arguments(for host: Host) throws -> [String] {
+        let address = host.address.trimmingCharacters(in: .whitespaces)
+        let user = host.sshUser.trimmingCharacters(in: .whitespaces)
+        guard isValidAddress(address) else { throw Problem.address }
+        guard isValidUser(user) else { throw Problem.user }
+        var args = try options(for: host)
+        if let port = host.port {
+            guard (1...65535).contains(port) else { throw Problem.port }
+            args += ["-p", String(port)]
+        }
+        if !host.jumpHost.trimmingCharacters(in: .whitespaces).isEmpty {
+            guard let jump = try? Self.jump(host.jumpHost) else { throw Problem.jump }
+            // Not -J: options on the command line don't reach a jump host
+            // (ssh(1), -J), so that leg would skip the key and the options
+            // above. A ProxyCommand runs ssh for it with the same ones. ssh
+            // runs it through /bin/sh and expands % tokens in it, so every
+            // word is quoted and its % doubled; %h and %p are the target.
+            var leg = [executable] + (try options(for: host))
+            if let port = jump.port { leg += ["-p", String(port)] }
+            let words = leg.map(proxyWord) + ["-W", "'[%h]:%p'", "--",
+                                              proxyWord(jump.user.isEmpty ? jump.address : "\(jump.user)@\(jump.address)")]
+            args += ["-o", "ProxyCommand=" + words.joined(separator: " ")]
+        }
+        // ssh splits user@host at the last @, so a user can't redirect it.
+        args += ["--", user.isEmpty ? address : "\(user)@\(address)"]
+        return args
+    }
+
+    /// One word of a ProxyCommand: in single quotes for the shell, % doubled
+    /// so ssh leaves it alone.
+    static func proxyWord(_ word: String) -> String {
+        ("'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'").replacingOccurrences(of: "%", with: "%%")
+    }
+
+    /// Only what ssh needs from the app's environment.
+    static func environment(_ from: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+        var env = ["TERM=xterm-256color", "COLORTERM=truecolor", "PATH=/usr/bin:/bin:/usr/sbin:/sbin"]
+        for key in ["HOME", "USER", "LOGNAME", "LANG", "SSH_AUTH_SOCK"] {
+            if let value = from[key] { env.append("\(key)=\(value)") }
+        }
+        if from["LANG"] == nil { env.append("LANG=en_US.UTF-8") }
+        return env
     }
 }
 
@@ -82,9 +278,13 @@ enum GatewayTransport: String, Codable, CaseIterable {
 }
 
 /// An RD Gateway and the hosts behind it. A blank address means the hosts are
-/// reached directly.
+/// reached directly. A jump host groups the SSH hosts reached through it; it
+/// is made and removed along with them.
 struct Gateway: Codable, Hashable, Identifiable {
+    enum Kind: String, Codable { case rdGateway, sshJump }
+
     var id = UUID()
+    var kind: Kind = .rdGateway
     var name: String = ""
     var host: String = ""
     var transport: GatewayTransport = .automatic
@@ -95,6 +295,7 @@ struct Gateway: Codable, Hashable, Identifiable {
     var gatewayAccountID: UUID?
 
     var isDirect: Bool { host.trimmingCharacters(in: .whitespaces).isEmpty }
+    var isJump: Bool { kind == .sshJump && !isDirect }
     var title: String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { return trimmed }
@@ -102,11 +303,12 @@ struct Gateway: Codable, Hashable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, host, transport, serverAccountID, separateAccount, gatewayAccountID
+        case id, kind, name, host, transport, serverAccountID, separateAccount, gatewayAccountID
     }
 
-    init(name: String = "", host: String = "", transport: GatewayTransport = .automatic,
+    init(kind: Kind = .rdGateway, name: String = "", host: String = "", transport: GatewayTransport = .automatic,
          serverAccountID: UUID? = nil, separateAccount: Bool = false, gatewayAccountID: UUID? = nil) {
+        self.kind = kind
         self.name = name
         self.host = host
         self.transport = transport
@@ -118,6 +320,7 @@ struct Gateway: Codable, Hashable, Identifiable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = c.value(.id, or: UUID())
+        kind = c.value(.kind, or: .rdGateway)
         name = c.value(.name, or: "")
         host = c.value(.host, or: "")
         transport = c.value(.transport, or: .automatic)
@@ -220,11 +423,17 @@ struct AppSettings: Codable {
     var collapsedGateways: [UUID] = []
     var windowWidth: Double = 1440
     var windowHeight: Double = 900
+    /// SSH sessions: the font, its size, and the text colour as "#RRGGBB"
+    /// (empty is the default light grey).
+    var terminalFont: TerminalFont = .sfMono
+    var terminalFontSize: Double = 13
+    var terminalTextColor = ""
 
     enum CodingKeys: String, CodingKey {
         case gateways, hosts, accounts, lastGatewayID, lastHostID, keyboardLayout, keyboardMode
         case sound, shareFolder, sharedFolderPath, sharpOnRetina, openFullscreen
         case dynamicResolution, hostsWithoutDynamicResolution, collapsedGateways, windowWidth, windowHeight
+        case terminalFont, terminalFontSize, terminalTextColor
     }
 
     init() {}
@@ -249,6 +458,9 @@ struct AppSettings: Codable {
         collapsedGateways = c.value(.collapsedGateways, or: [])
         windowWidth = c.value(.windowWidth, or: d.windowWidth)
         windowHeight = c.value(.windowHeight, or: d.windowHeight)
+        terminalFont = c.value(.terminalFont, or: d.terminalFont)
+        terminalFontSize = c.value(.terminalFontSize, or: d.terminalFontSize)
+        terminalTextColor = c.value(.terminalTextColor, or: d.terminalTextColor)
     }
 
     /// Makes sure there is at least one gateway, every host belongs to one,
@@ -256,12 +468,37 @@ struct AppSettings: Codable {
     mutating func normalize() {
         // Hosts reached without a gateway always have a group of their own.
         if !gateways.contains(where: \.isDirect) { gateways.append(Gateway()) }
-        let ids = Set(gateways.map(\.id))
+        let known = Set(gateways.map(\.id))
         // A host without a (known) gateway is reached directly.
         let direct = gateways.first(where: \.isDirect)!.id
-        for i in hosts.indices where hosts[i].gatewayID.map({ !ids.contains($0) }) ?? true {
+        for i in hosts.indices where hosts[i].gatewayID.map({ !known.contains($0) }) ?? true {
             hosts[i].gatewayID = direct
         }
+        // An RD Gateway only carries RDP. SSH hosts go under their jump host,
+        // made here when it's new, or are direct.
+        for i in hosts.indices where hosts[i].isSSH {
+            if let jump = try? SSHCommand.jump(hosts[i].jumpHost) {
+                hosts[i].jumpHost = jump.spec
+                if let group = gateways.first(where: { $0.isJump && $0.host == jump.spec }) {
+                    hosts[i].gatewayID = group.id
+                } else {
+                    let group = Gateway(kind: .sshJump, host: jump.spec)
+                    gateways.append(group)
+                    hosts[i].gatewayID = group.id
+                }
+            } else {
+                hosts[i].gatewayID = direct
+            }
+        }
+        // Remote Desktop hosts never sit under a jump host.
+        let jumpIDs = Set(gateways.filter(\.isJump).map(\.id))
+        for i in hosts.indices where !hosts[i].isSSH && jumpIDs.contains(hosts[i].gatewayID ?? direct) {
+            hosts[i].gatewayID = direct
+        }
+        // A jump host without hosts goes.
+        let used = Set(hosts.compactMap(\.gatewayID))
+        gateways.removeAll { $0.isJump && !used.contains($0.id) }
+        let ids = Set(gateways.map(\.id))
         let accountIDs = Set(accounts.map(\.id))
         for i in gateways.indices {
             if let a = gateways[i].serverAccountID, !accountIDs.contains(a) { gateways[i].serverAccountID = nil }
@@ -405,9 +642,9 @@ enum Keychain {
     /// It then prompts twice on stdin, so the value goes in twice. A write is
     /// only trusted once it reads back.
     @discardableResult
-    static func setPassword(_ password: String, for account: String) -> Bool {
+    static func setPassword(_ password: String, for account: String, description: String = "RDP password") -> Bool {
         let (status, _) = run(["add-generic-password", "-a", account, "-s", service, "-U",
-                               "-l", "iGateway.exe (\(account))", "-D", "RDP password", "-w"],
+                               "-l", "iGateway.exe (\(account))", "-D", description, "-w"],
                               stdin: "\(password)\n\(password)\n")
         guard status == 0 else { return false }
         return Self.password(for: account) == password
@@ -421,8 +658,9 @@ enum Keychain {
         await Task.detached { password(for: account) }.value
     }
 
-    static func setPasswordAsync(_ password: String, for account: String) async -> Bool {
-        await Task.detached { setPassword(password, for: account) }.value
+    static func setPasswordAsync(_ password: String, for account: String,
+                                 description: String = "RDP password") async -> Bool {
+        await Task.detached { setPassword(password, for: account, description: description) }.value
     }
 }
 

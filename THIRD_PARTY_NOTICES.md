@@ -30,5 +30,12 @@ app compiles in the following software, built from source by
 - Apache License 2.0, the same text as `LICENSE`
 - Copyright the OpenSSL Project Authors
 
+## SwiftTerm
+
+- https://github.com/migueldeicaza/SwiftTerm, version 1.20.0, the terminal
+  for SSH sessions
+- MIT License, copyright Miguel de Icaza and the xterm.js authors.
+  `build.zsh` puts the licence text in the app as `SwiftTerm-LICENSE.txt`.
+
 Nothing else is linked besides frameworks and libraries that ship with macOS.
 CMake is downloaded to build FreeRDP and is not part of the app.

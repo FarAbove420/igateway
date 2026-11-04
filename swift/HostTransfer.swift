@@ -43,12 +43,26 @@ struct HostListFile: Codable {
         var label: String
         var dockLabel: String
         var labelColor: String
+        /// SSH hosts only, so an RDP host exports as before. No key file:
+        /// a path means nothing on another Mac.
+        var kind: HostKind?
+        var sshUser: String?
+        var port: Int?
+        var sshAuth: SSHAuth?
+        var jumpHost: String?
 
-        init(address: String, label: String, dockLabel: String, labelColor: String) {
-            self.address = address
-            self.label = label
-            self.dockLabel = dockLabel
-            self.labelColor = labelColor
+        init(_ host: Host) {
+            address = host.address
+            label = host.label
+            dockLabel = host.dockLabel
+            labelColor = host.labelColor
+            if host.isSSH {
+                kind = .ssh
+                sshUser = host.sshUser
+                port = host.port
+                sshAuth = host.sshAuth
+                jumpHost = host.jumpHost.isEmpty ? nil : host.jumpHost
+            }
         }
 
         init(from decoder: Decoder) throws {
@@ -57,6 +71,11 @@ struct HostListFile: Codable {
             label = c.value(.label, or: "")
             dockLabel = c.value(.dockLabel, or: "")
             labelColor = c.value(.labelColor, or: "")
+            kind = c.value(.kind, or: nil)
+            sshUser = c.value(.sshUser, or: nil)
+            port = c.value(.port, or: nil)
+            sshAuth = c.value(.sshAuth, or: nil)
+            jumpHost = c.value(.jumpHost, or: nil)
         }
     }
 }
@@ -69,11 +88,15 @@ enum HostImportError: LocalizedError {
 
 extension AppSettings {
     func exportedHosts() throws -> Data {
-        let file = HostListFile(gateways: gateways.map { gateway in
+        // A jump host isn't a gateway: its hosts carry it in their own
+        // field, so they go with the direct ones and the group comes back
+        // on import.
+        let jumpIDs = Set(gateways.filter(\.isJump).map(\.id))
+        let file = HostListFile(gateways: gateways.filter { !$0.isJump }.map { gateway in
             .init(name: gateway.name, host: gateway.host, transport: gateway.transport,
-                  hosts: hosts.filter { $0.gatewayID == gateway.id }.map {
-                      .init(address: $0.address, label: $0.label, dockLabel: $0.dockLabel, labelColor: $0.labelColor)
-                  })
+                  hosts: hosts.filter {
+                      $0.gatewayID == gateway.id || (gateway.isDirect && jumpIDs.contains($0.gatewayID ?? gateway.id))
+                  }.map { .init($0) })
         })
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -110,14 +133,33 @@ extension AppSettings {
             for host in incoming.hosts {
                 let address = host.address.trimmingCharacters(in: .whitespaces)
                 guard !address.isEmpty else { continue }
-                if hosts.contains(where: { $0.gatewayID == gatewayID && key($0.address) == key(address) }) {
+                var added = Host(address: address, label: host.label.trimmingCharacters(in: .whitespaces),
+                                 gatewayID: gatewayID,
+                                 dockLabel: host.dockLabel.trimmingCharacters(in: .whitespaces),
+                                 labelColor: host.labelColor)
+                if host.kind == .ssh {
+                    added.kind = .ssh
+                    added.sshUser = (host.sshUser ?? "").trimmingCharacters(in: .whitespaces)
+                    added.port = host.port
+                    added.sshAuth = host.sshAuth ?? .key
+                    added.jumpHost = (host.jumpHost ?? "").trimmingCharacters(in: .whitespaces)
+                    added.gatewayID = gateways.first(where: \.isDirect)?.id ?? gatewayID
+                }
+                // A file from elsewhere: an SSH host ssh would refuse, or read
+                // as an option, is left out.
+                if added.isSSH, (try? SSHCommand.arguments(for: added)) == nil {
                     result.skipped += 1
                     continue
                 }
-                hosts.append(Host(address: address, label: host.label.trimmingCharacters(in: .whitespaces),
-                                  gatewayID: gatewayID,
-                                  dockLabel: host.dockLabel.trimmingCharacters(in: .whitespaces),
-                                  labelColor: host.labelColor))
+                let duplicate = added.isSSH
+                    ? hosts.contains { $0.isSSH && key($0.address) == key(address) && $0.jumpHost == added.jumpHost
+                                       && $0.sshUser == added.sshUser && $0.port == added.port }
+                    : hosts.contains { $0.gatewayID == added.gatewayID && !$0.isSSH && key($0.address) == key(address) }
+                if duplicate {
+                    result.skipped += 1
+                    continue
+                }
+                hosts.append(added)
                 result.hosts += 1
             }
         }

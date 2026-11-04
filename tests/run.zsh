@@ -28,7 +28,8 @@ CFLAGS=(-arch arm64 -mmacosx-version-min=13.0 -Wno-deprecated-declarations -O1)
 LINK=(
   "$DEPS/lib/libfreerdp-client3.a" "$DEPS/lib/libfreerdp3.a" "$DEPS/lib/libwinpr3.a" "$DEPS"/lib/freerdp3/*.a
   "$DEPS/lib/libavcodec.a" "$DEPS/lib/libswscale.a" "$DEPS/lib/libavutil.a"
-  "$DEPS/lib/libssl.a" "$DEPS/lib/libcrypto.a" "$(xcrun --show-sdk-path)/usr/lib/libz.tbd"
+  "$DEPS/lib/libssl.a" "$DEPS/lib/libcrypto.a" "$DEPS/lib/libSwiftTerm.a" "$(xcrun --show-sdk-path)/usr/lib/libz.tbd"
+  -framework Metal -framework MetalKit -framework CoreText
   -framework Carbon -framework IOSurface -framework AVFoundation -framework AudioToolbox -framework CoreAudio
   -framework Security -framework SystemConfiguration -framework IOKit -framework CoreFoundation
   -framework VideoToolbox -framework CoreMedia -framework CoreVideo
@@ -42,7 +43,7 @@ cc -c "$TESTS/unit/shim.c" $INCLUDES $CFLAGS -o "$OUT/shim.o" || exit 1
 build() {
   local name="$1" header="$2"
   shift 2
-  if ! swiftc -target arm64-apple-macos13.0 -I "$ROOT/bridge" -import-objc-header "$header" \
+  if ! swiftc -target arm64-apple-macos13.0 -I "$ROOT/bridge" -I "$DEPS/swift" -import-objc-header "$header" \
          "$TESTS/$name/main.swift" $SOURCES "$OUT/rdpbridge.o" "$@" $LINK \
          -o "$OUT/$name" > "$OUT/$name.log" 2>&1; then
     grep "error:" "$OUT/$name.log"

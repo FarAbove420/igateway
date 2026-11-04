@@ -30,8 +30,10 @@ builder's own folders out of the app. Nothing is ever installed in
 into one executable that only needs macOS itself. `BUNDLE_ID=...` gives your
 own builds their own bundle identifier.
 
-The icons, an apple for the app and a PC for each session, are drawn by
-`icon/make-icon.swift`; `icon/make-icon.zsh` rebuilds the `.icns` files.
+The app's icon is the artwork in `icon/AppIcon-art.webp`: `icon/make-icon.swift`
+cuts its tile out of the black around it and puts it on Apple's icon grid.
+The PC for each session is drawn there too. `icon/make-icon.zsh` rebuilds
+the `.icns` files.
 
 ## Where things are kept
 
@@ -209,6 +211,93 @@ round in Windows and gets flipped. Encoding per MS-RDPBCGR 2.2.8.1.1.3.1.1.3.
 Passwords go straight into FreeRDP's settings, never through a command line.
 Keychain access goes through `/usr/bin/security` off the main thread, with `-w`
 as the last argument, and every write is read back before it is trusted.
+
+## SSH sessions
+
+An SSH host runs the Mac's own `/usr/bin/ssh` in a terminal view from
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), in the host's own
+session app like a Remote Desktop session. Using the system's ssh means keys,
+the agent, `known_hosts` and certificates work as they do in Terminal, and no
+SSH or crypto code of our own is involved. Everything filled in on the host
+(user, port, key, jump host) is passed to ssh on its command line.
+
+What iGateway adds is a stricter frame around it:
+
+- **Passwords never go through the terminal.** A server can send a banner
+  before login that looks exactly like ssh's password prompt, and a password
+  typed into that would end up in the remote shell. So iGateway never types
+  one. Instead ssh runs with `SSH_ASKPASS_REQUIRE=force` (`ssh(1)`,
+  ENVIRONMENT): it doesn't read passwords from the terminal but runs a helper,
+  which is iGateway's own executable. The helper asks the session over a
+  socket in a folder only you can open, and prints the answer for ssh. ssh
+  only runs it when its own login needs an answer, so a server's text can't.
+- **Saved passwords** come from the Keychain, and only for ssh's own password
+  prompt for exactly the host's, or its jump host's, user@address. Anything
+  else ssh asks (a new host key, a key's passphrase, a one-time code) is shown
+  as a sheet with ssh's own text. A password is saved only when you tick the
+  box, per user, server and port. When ssh asks again in the same session, the
+  saved one was refused: it's deleted and you're asked. The socket answers
+  only a process started by that session's ssh (checked by its parent
+  process) that also has the session's random token.
+- **Fixed options.** Every session runs
+  `ssh -o ForwardAgent=no -o ForwardX11=no -o StrictHostKeyChecking=ask
+  [-p port] [auth options] -- [user@]host`. Options on the command line win
+  over `~/.ssh/config`, so a config can't loosen these (the unit tests check
+  this against the real ssh with `ssh -G`).
+- **Key or certificate by default.** Such a host also gets
+  `PasswordAuthentication=no` and `KbdInteractiveAuthentication=no`, so ssh
+  never asks for a password, and a fake server can't make it. A chosen key
+  file adds `-i <file> -o IdentitiesOnly=yes`; ssh also picks up a
+  certificate next to it (`<file>-cert.pub`). A host set to "Password" lets
+  ssh ask in the terminal, every time.
+- **No way to sneak in an option.** The address and user are checked (no
+  leading dash, no spaces or control characters) and `--` ends ssh's options
+  before the destination. Imported host lists go through the same check.
+- **A small environment.** ssh gets `TERM`, `PATH`, `HOME`, `USER`,
+  `LOGNAME`, `LANG` and `SSH_AUTH_SOCK`, nothing else from the app.
+- **What the server can make the Mac do.** SwiftTerm's own process view lets
+  the server read and write the clipboard (OSC 52), so the session uses its
+  base view with its own small wrapper instead. The server can't touch the
+  clipboard, can't change the window title, and gets no answer to title
+  queries. Links open only for http and https, after showing the address.
+  Pasting several lines into a program that doesn't mark pastes (bracketed
+  paste) asks first, because the server runs each line as it arrives.
+- **Logs** get the ssh command line, start and exit code, never what goes
+  through the terminal.
+
+**Jump hosts.** An SSH host's Jump host field goes to ssh as `-J`
+(`ssh(1)`): ssh logs in to the jump host first and goes on from there. The
+jump host only passes the encrypted connection through: it never sees the
+target's password or your keys, as agent forwarding stays off. Both host keys
+are checked. Hosts with the same jump host are grouped under it in the
+sidebar; the group comes and goes with them. One limit, from the man page:
+options on the command line apply to the target, not the jump host.
+
+ssh exits with the remote command's status, or 255 when it couldn't connect
+or log in (`ssh(1)`, EXIT STATUS). A 255 keeps the window open on ssh's
+message and shows as failed in Recent; anything else closes it, like signing
+out of Windows. SSH hosts never go through an RD Gateway, which only carries
+Remote Desktop.
+
+### Keys and certificates
+
+Logging in with a key, or better a certificate, is safer than a password.
+None of this needs anything from iGateway: it is how OpenSSH works, and the
+details are in the man pages named.
+
+- **A key per admin.** An ed25519 key with a passphrase, kept in the Keychain
+  with `ssh-add --apple-use-keychain`, and its public key on the servers.
+- **User certificates.** A CA key signs each admin's public key with
+  `ssh-keygen -s` (`-I` who it is, `-n` the accounts it may log in as, `-V`
+  how long it is valid). Servers trust the CA once with `TrustedUserCAKeys`,
+  and `AuthorizedPrincipalsFile` says who may log in as what. No
+  `authorized_keys` on every server, certificates expire by themselves, and
+  `RevokedKeys` blocks one early. See `ssh-keygen(1)`, CERTIFICATES, and
+  `sshd_config(5)`.
+- **Host certificates.** The same CA signs the servers' host keys. One
+  `@cert-authority` line in `known_hosts` then trusts them all (`sshd(8)`,
+  SSH_KNOWN_HOSTS FILE FORMAT), so there is no "are you sure" on a first
+  connect, and a server that isn't the real one stands out.
 
 ## Why AppKit and not SwiftUI
 

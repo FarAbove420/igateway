@@ -38,8 +38,9 @@ enum SessionBundle {
 
     /// Opens the host in its own process, or brings its session to the front
     /// when it is already open. False when that could not be done, so the
-    /// caller can run the session inside the main app instead.
-    static func open(host: Host, password: String, gatewayPassword: String?) -> Bool {
+    /// caller can run the session inside the main app instead. SSH sessions
+    /// get no password here: ssh asks through the password helper.
+    static func open(host: Host, password: String?, gatewayPassword: String?) -> Bool {
         let id = bundleIdentifier(for: host.id)
         if let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
             bringToFront(running)
@@ -64,8 +65,10 @@ enum SessionBundle {
         }
         do {
             try process.run()
-            let secrets = try JSONEncoder().encode(Secrets(password: password, gatewayPassword: gatewayPassword))
-            try pipe.fileHandleForWriting.write(contentsOf: secrets)
+            if let password {
+                let secrets = try JSONEncoder().encode(Secrets(password: password, gatewayPassword: gatewayPassword))
+                try pipe.fileHandleForWriting.write(contentsOf: secrets)
+            }
             try pipe.fileHandleForWriting.close()
         } catch {
             AppLog.write("\(host.display): could not start its session app: \(error.localizedDescription)")
@@ -256,6 +259,7 @@ final class SessionAppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
     private let hostID: UUID
     private var settings = AppSettings()
     private var session: SessionWindowController?
+    private var terminal: TerminalWindowController?
 
     init(hostID: UUID) {
         self.hostID = hostID
@@ -264,11 +268,12 @@ final class SessionAppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu(target: self)
         let secrets = Secrets.fromStandardInput()
-        guard let loaded = Store.read(),
-              let host = loaded.hosts.first(where: { $0.id == hostID }),
-              let gateway = loaded.gateway(for: host),
-              let server = loaded.accounts.first(where: { $0.id == gateway.serverAccountID }) ?? loaded.accounts.first
-        else {
+        let loaded = Store.read()
+        let host = loaded?.hosts.first(where: { $0.id == hostID })
+        let gateway = host.flatMap { loaded?.gateway(for: $0) }
+        let server = loaded?.accounts.first(where: { $0.id == gateway?.serverAccountID }) ?? loaded?.accounts.first
+        // SSH hosts need no account: ssh logs in with a key, or asks.
+        guard let loaded, let host, let gateway, host.isSSH || server != nil else {
             AppLog.write("Session app for \(hostID): host or account no longer configured")
             openMainApp()
             NSApp.terminate(nil)
@@ -288,6 +293,12 @@ final class SessionAppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
             return
         }
         settings = loaded
+        NSApp.applicationIconImage = Self.icon(labelled: host.dockLabel, color: host.color)
+        if host.isSSH {
+            startTerminal(host: host)
+            return
+        }
+        guard let server else { return }
         let gatewayAccount = gateway.separateAccount && !gateway.isDirect
             ? loaded.accounts.first(where: { $0.id == gateway.gatewayAccountID }) : nil
         let separate = gatewayAccount.map { $0.keychainKey != server.keychainKey } ?? false
@@ -296,7 +307,6 @@ final class SessionAppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
             settings.windowWidth = max(640, size[0])
             settings.windowHeight = max(400, size[1])
         }
-        NSApp.applicationIconImage = Self.icon(labelled: host.dockLabel, color: host.color)
 
         Task { @MainActor in
             var password = secrets?.password
@@ -316,6 +326,18 @@ final class SessionAppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
             self.start(host: host, gateway: gateway, server: server,
                        gatewayAccount: separate ? gatewayAccount : nil,
                        password: password, gatewayPassword: gatewayPassword)
+        }
+    }
+
+    private func startTerminal(host: Host) {
+        let terminal = TerminalWindowController(host: host)
+        self.terminal = terminal
+        terminal.showWindow(nil)
+        terminal.start()
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
@@ -356,7 +378,7 @@ final class SessionAppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
 
     /// Dock click or Show in the host list: a minimised window comes back.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if let window = session?.window {
+        if let window = session?.window ?? terminal?.window {
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
         }
@@ -364,6 +386,16 @@ final class SessionAppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if let terminal, terminal.isActive {
+            let alert = NSAlert()
+            alert.messageText = "Close the session to \(terminal.host.title)?"
+            alert.informativeText = "Whatever is running in it stops."
+            alert.addButton(withTitle: "Quit")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+            terminal.disconnectForQuit()
+            return .terminateNow
+        }
         guard let session, session.isActive else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Close the session to \(session.host.title)?"

