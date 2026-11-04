@@ -612,9 +612,42 @@ check("an IPv6 jump host in brackets", (try? SSHCommand.jump("[fe80::1]:22"))??.
 check("no jump host is nil, not an error", (try? SSHCommand.jump("  ")) == .some(nil))
 check("a jump host that is an option, a list or a bad port is refused",
       ["-oProxyCommand=x", "a,b", "jump:0", "jump:x", "us er@jump", "[fe80::1"].allSatisfy { (try? SSHCommand.jump($0)) == nil })
-let jumpArgs = sshArgs { $0.jumpHost = "admin@jump.example:2200" } ?? []
-check("the jump host goes in with -J, before --",
-      jumpArgs.firstIndex(of: "-J").map { jumpArgs[$0 + 1] == "admin@jump.example:2200" && $0 < jumpArgs.firstIndex(of: "--")! } ?? false)
+let jumpArgs = sshArgs { $0.jumpHost = "admin@jump.example:2200"; $0.identityFile = "/Users/x/.ssh/id_ed25519" } ?? []
+let proxy = jumpArgs.first { $0.hasPrefix("ProxyCommand=") } ?? ""
+check("the jump leg runs ssh with the same key and locked-down options",
+      ["'ForwardAgent=no'", "'StrictHostKeyChecking=ask'", "'PasswordAuthentication=no'", "'/Users/x/.ssh/id_ed25519'",
+       "'IdentitiesOnly=yes'", "'-p' '2200'", "-W '[%h]:%p' -- 'admin@jump.example'"].allSatisfy { proxy.contains($0) }
+      && !jumpArgs.contains("-J") && jumpArgs.firstIndex(of: "--")! > jumpArgs.firstIndex(of: "ProxyCommand=" + proxy.dropFirst(13))!)
+
+// What /bin/sh makes of a ProxyCommand, after ssh fills in its % tokens.
+func shellWords(_ command: String) -> [String] {
+    // Left to right, as ssh does: %% is a %, %h and %p are filled in.
+    var filled = "", chars = Array(command), i = 0
+    while i < chars.count {
+        if chars[i] == "%", i + 1 < chars.count {
+            filled += chars[i + 1] == "h" ? "192.0.2.9" : chars[i + 1] == "p" ? "22" : String(chars[i + 1])
+            i += 2
+        } else {
+            filled.append(chars[i])
+            i += 1
+        }
+    }
+    let sh = Process()
+    sh.executableURL = URL(fileURLWithPath: "/bin/sh")
+    sh.arguments = ["-c", "for w in " + filled.split(separator: " ", maxSplits: 1).last.map(String.init)! + "; do printf '%s\\n' \"$w\"; done"]
+    let out = Pipe()
+    sh.standardOutput = out
+    try? sh.run()
+    sh.waitUntilExit()
+    return String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").map(String.init)
+}
+let pwned = "/tmp/igateway-pwned-\(getpid())"
+let nasty = "/Users/x/it's $(touch \(pwned)) `touch \(pwned)` 100%h \\ \"q\""
+let nastyProxy = (sshArgs { $0.jumpHost = "jump.example"; $0.identityFile = nasty } ?? [])
+    .first { $0.hasPrefix("ProxyCommand=") }.map { String($0.dropFirst(13)) } ?? ""
+let words = shellWords(nastyProxy)
+check("a key path with quotes, $( ), backticks and % reaches the jump leg as itself",
+      words.contains(nasty) && words.contains("[192.0.2.9]:22") && !FileManager.default.fileExists(atPath: pwned))
 check("a bad jump host stops the connection", sshArgs { $0.jumpHost = "-oProxyCommand=x" } == nil)
 let jumpProbe = Process()
 jumpProbe.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -625,7 +658,7 @@ jumpProbe.standardError = FileHandle.nullDevice
 try? jumpProbe.run()
 let jumpResolved = String(decoding: jumpOut.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
 jumpProbe.waitUntilExit()
-check("ssh itself goes through the jump host", jumpResolved.contains("\nproxyjump admin@jump.example:2200\n"))
+check("ssh itself takes the jump leg's command", jumpResolved.contains("\nproxycommand ") && jumpResolved.contains("admin@jump.example"))
 
 var grouped = AppSettings()
 var a = ssh; a.jumpHost = "admin@jump.example"
@@ -675,6 +708,41 @@ check("a new host key is a question for you",
       { if case .hostKey = Askpass.classify("The authenticity of host 'x' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ", logins: logins) { return true }; return false }())
 check("saved passwords are kept per user, server and port",
       target1.keychainKey == "ssh:admin@server.example.com:22" && jump1.keychainKey == "ssh:admin@jump.example:2200")
+
+// MARK: SSH keys (the tests' own home folder, never the real ~/.ssh)
+print("== SSH keys")
+check("the tests use their own home folder", !SSHKeys.directory.path.hasPrefix("/Users/\(NSUserName())/.ssh"))
+let keyName = "id_ed25519_test_\(getpid())"
+let made = try? SSHKeys.create(name: keyName, passphrase: "a long passphrase")
+check("a new key is made, private and public", made.map { FileManager.default.fileExists(atPath: $0)
+      && SSHKeys.publicKey($0)?.hasPrefix("ssh-ed25519 ") == true } ?? false)
+let mode = made.flatMap { try? FileManager.default.attributesOfItem(atPath: $0)[.posixPermissions] as? Int }
+check("only you can read the private key", mode == 0o600)
+check("it shows up in the key list", made.map { SSHKeys.list().contains($0) } ?? false)
+func unlocks(_ path: String, _ passphrase: String) -> Bool {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
+    p.arguments = ["-y", "-P", passphrase, "-f", path]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try? p.run()
+    p.waitUntilExit()
+    return p.terminationStatus == 0
+}
+check("the passphrase protects it", made.map { unlocks($0, "a long passphrase") && !unlocks($0, "") } ?? false)
+check("without a passphrase is possible too",
+      (try? SSHKeys.create(name: keyName + "_open", passphrase: "")).map { unlocks($0, "") } ?? false)
+check("a name that exists is refused", (try? SSHKeys.create(name: keyName, passphrase: "")) == nil)
+check("names that escape the folder or look like options are refused",
+      ["../evil", "-x", "a b", ".hidden", "", "x/y"].allSatisfy { !SSHKeys.isValidName($0) })
+if let made {
+    check("ssh's passphrase prompt for an existing key is recognised",
+          Askpass.classify("Enter passphrase for key '\(made)': ", logins: []) == .passphrase(made))
+}
+check("a key that isn't there, or a cut-off path, is a plain question",
+      Askpass.classify("Enter passphrase for key '/nowhere/key': ", logins: []) == .other("Enter passphrase for key '/nowhere/key': ")
+      && Askpass.classify("Enter passphrase for key '/\(String(repeating: "a", count: 99))': ", logins: [])
+         == .other("Enter passphrase for key '/\(String(repeating: "a", count: 99))': "))
 
 check("every terminal font is on this Mac", TerminalFont.allCases.allSatisfy {
     $0.postScriptName.map { NSFont(name: $0, size: 13) != nil } ?? true })

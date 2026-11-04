@@ -26,6 +26,8 @@ enum Askpass {
 
     enum Prompt: Equatable {
         case password(SSHCommand.Login)
+        /// A key file's passphrase, by the key's path.
+        case passphrase(String)
         case hostKey(String)
         case other(String)
     }
@@ -40,6 +42,16 @@ enum Askpass {
             if prompt.hasPrefix("(\(userAt)) "),
                prompt.dropFirst(userAt.count + 3).trimmingCharacters(in: .whitespaces).lowercased() == "password:" {
                 return .password(login)
+            }
+        }
+        // "Enter passphrase for key '<path>': ", the path cut off at 100
+        // characters (tested with OpenSSH 10.3): only a whole path, of a key
+        // that is there, counts.
+        let head = "Enter passphrase for key '", tail = "': "
+        if prompt.hasPrefix(head), prompt.hasSuffix(tail) {
+            let path = String(prompt.dropFirst(head.count).dropLast(tail.count))
+            if path.hasPrefix("/"), path.count < 100, FileManager.default.fileExists(atPath: path) {
+                return .passphrase(path)
             }
         }
         if prompt.contains("Are you sure you want to continue connecting") { return .hostKey(prompt) }

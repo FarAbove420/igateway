@@ -232,22 +232,33 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     private func answer(_ prompt: String, reply: @escaping (String?) -> Void) {
         let kind = Askpass.classify(prompt, logins: logins)
-        guard case .password(let login) = kind else {
+        let key: String
+        let what: String
+        switch kind {
+        case .password(let login):
+            key = login.keychainKey
+            what = "the password of \(login.effectiveUser)@\(login.address)"
+        case .passphrase(let path):
+            key = SSHKeys.keychainKey(path)
+            what = "the passphrase of the key \((path as NSString).lastPathComponent)"
+        case .hostKey, .other:
+            // Prompts hold no secrets, answers do: only the prompt is logged.
+            AppLog.write("\(host.display): ssh asks: \(prompt.prefix(120).replacingOccurrences(of: "\n", with: " "))")
             ask(kind, false) { text, _ in reply(text) }
             return
         }
-        let key = login.keychainKey
         let attempt = (asked[key] ?? 0) + 1
         asked[key] = attempt
+        AppLog.write("\(host.display): ssh asks for \(what)" + (attempt > 1 ? ", attempt \(attempt)" : ""))
         Task { @MainActor in
             if attempt == 1, let saved = await self.passwords.get(key) {
-                AppLog.write("\(self.host.display): sent the saved password for \(login.effectiveUser)@\(login.address)")
+                AppLog.write("\(self.host.display): sent the saved one")
                 reply(saved)
                 return
             }
             // Asked again: the last one was refused, so it goes.
             if attempt > 1 { await self.passwords.delete(key) }
-            self.ask(.password(login), attempt > 1) { text, save in
+            self.ask(kind, attempt > 1) { text, save in
                 if let text, save { Task { await self.passwords.set(text, key) } }
                 reply(text)
             }
@@ -257,7 +268,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
     private func showSheet(_ prompt: Askpass.Prompt, retry: Bool, done: @escaping (String?, Bool) -> Void) {
         guard let window else { return done(nil, false) }
         let alert = NSAlert()
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 28))
+        field.font = .systemFont(ofSize: 15)
         let save = NSButton(checkboxWithTitle: "Save in the Keychain", target: nil, action: nil)
         save.state = .on
         switch prompt {
@@ -268,9 +280,21 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
             let stack = NSStackView(views: [field, save])
             stack.orientation = .vertical
             stack.alignment = .leading
-            stack.frame = NSRect(x: 0, y: 0, width: 260, height: 52)
+            stack.spacing = 10
+            stack.frame = NSRect(x: 0, y: 0, width: 320, height: 62)
             alert.accessoryView = stack
             alert.addButton(withTitle: "Log In")
+        case .passphrase(let path):
+            let name = (path as NSString).lastPathComponent
+            alert.messageText = retry ? "That passphrase didn't work" : "Passphrase for the key \(name)"
+            alert.informativeText = retry ? "Try again for \(name)." : "ssh needs it to use the key."
+            let stack = NSStackView(views: [field, save])
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 10
+            stack.frame = NSRect(x: 0, y: 0, width: 320, height: 62)
+            alert.accessoryView = stack
+            alert.addButton(withTitle: "Use Key")
         case .hostKey(let text):
             alert.messageText = "First connection to this server"
             alert.informativeText = text + "\n\nCompare the fingerprint with the one the server's admin has."

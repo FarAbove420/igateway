@@ -177,16 +177,10 @@ enum SSHCommand {
         })
     }
 
-    static func arguments(for host: Host) throws -> [String] {
-        let address = host.address.trimmingCharacters(in: .whitespaces)
-        let user = host.sshUser.trimmingCharacters(in: .whitespaces)
-        guard isValidAddress(address) else { throw Problem.address }
-        guard isValidUser(user) else { throw Problem.user }
+    /// What both legs get, the host's and its jump host's: the locked-down
+    /// options and the sign-in.
+    private static func options(for host: Host) throws -> [String] {
         var args = ["-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "StrictHostKeyChecking=ask"]
-        if let port = host.port {
-            guard (1...65535).contains(port) else { throw Problem.port }
-            args += ["-p", String(port)]
-        }
         if host.sshAuth == .key {
             // A fake server can't ask for a password ssh won't give.
             args += ["-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"]
@@ -197,13 +191,41 @@ enum SSHCommand {
                 args += ["-i", host.identityFile, "-o", "IdentitiesOnly=yes"]
             }
         }
+        return args
+    }
+
+    static func arguments(for host: Host) throws -> [String] {
+        let address = host.address.trimmingCharacters(in: .whitespaces)
+        let user = host.sshUser.trimmingCharacters(in: .whitespaces)
+        guard isValidAddress(address) else { throw Problem.address }
+        guard isValidUser(user) else { throw Problem.user }
+        var args = try options(for: host)
+        if let port = host.port {
+            guard (1...65535).contains(port) else { throw Problem.port }
+            args += ["-p", String(port)]
+        }
         if !host.jumpHost.trimmingCharacters(in: .whitespaces).isEmpty {
             guard let jump = try? Self.jump(host.jumpHost) else { throw Problem.jump }
-            args += ["-J", jump.spec]
+            // Not -J: options on the command line don't reach a jump host
+            // (ssh(1), -J), so that leg would skip the key and the options
+            // above. A ProxyCommand runs ssh for it with the same ones. ssh
+            // runs it through /bin/sh and expands % tokens in it, so every
+            // word is quoted and its % doubled; %h and %p are the target.
+            var leg = [executable] + (try options(for: host))
+            if let port = jump.port { leg += ["-p", String(port)] }
+            let words = leg.map(proxyWord) + ["-W", "'[%h]:%p'", "--",
+                                              proxyWord(jump.user.isEmpty ? jump.address : "\(jump.user)@\(jump.address)")]
+            args += ["-o", "ProxyCommand=" + words.joined(separator: " ")]
         }
         // ssh splits user@host at the last @, so a user can't redirect it.
         args += ["--", user.isEmpty ? address : "\(user)@\(address)"]
         return args
+    }
+
+    /// One word of a ProxyCommand: in single quotes for the shell, % doubled
+    /// so ssh leaves it alone.
+    static func proxyWord(_ word: String) -> String {
+        ("'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'").replacingOccurrences(of: "%", with: "%%")
     }
 
     /// Only what ssh needs from the app's environment.

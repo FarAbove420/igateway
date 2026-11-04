@@ -46,6 +46,7 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
     private let sshPortValue = NSTextField(labelWithString: "")
     private let sshAuthValue = NSTextField(wrappingLabelWithString: "")
     private let sshJumpValue = NSTextField(labelWithString: "")
+    private let copyKeyButton = NSButton(title: "Show Public Key", target: nil, action: nil)
     // For all SSH sessions.
     private let fontPopup = NSPopUpButton()
     private let fontSizePopup = NSPopUpButton()
@@ -185,6 +186,10 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
             control.target = self
             control.action = #selector(terminalAppearanceChanged)
         }
+        copyKeyButton.target = self
+        copyKeyButton.action = #selector(showPublicKey)
+        copyKeyButton.bezelStyle = .rounded
+        copyKeyButton.controlSize = .small
         let resetColor = NSButton(title: "Default", target: self, action: #selector(resetTerminalTextColor))
         resetColor.controlSize = .small
         resetColor.bezelStyle = .rounded
@@ -193,6 +198,7 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
             [label("Port"), sshPortValue],
             [label("Jump host"), sshJumpValue],
             [label("Sign in"), sshAuthValue],
+            [NSGridCell.emptyContentView, copyKeyButton],
             [label("Font"), row(fontPopup, fontSizePopup)],
             [label("Text colour"), row(textColorWell, resetColor)],
         ])
@@ -373,6 +379,8 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         grid.isHidden = ssh || jumpGroup
         sshGrid.isHidden = !(ssh || jumpGroup)
         for i in 0..<4 { sshGrid.row(at: i).isHidden = jumpGroup }
+        let keyFile = selectedHost.map { $0.isSSH && $0.sshAuth == .key ? $0.identityFile : "" } ?? ""
+        sshGrid.row(at: 4).isHidden = jumpGroup || keyFile.isEmpty || SSHKeys.publicKey(keyFile) == nil
         if let host = selectedHost, ssh {
             sshUserValue.stringValue = host.sshUser.isEmpty ? "\(NSUserName()), your Mac user name" : host.sshUser
             sshPortValue.stringValue = host.port.map(String.init) ?? "22"
@@ -415,6 +423,11 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
             s.terminalFontSize = Self.fontSizes[max(0, fontSizePopup.indexOfSelectedItem)]
             s.terminalTextColor = visible.hexString
         }
+    }
+
+    @objc private func showPublicKey() {
+        guard let host = selectedHost, !host.identityFile.isEmpty, let window else { return }
+        PublicKeySheet.present(on: window, path: host.identityFile)
     }
 
     @objc private func resetTerminalTextColor() {
@@ -972,33 +985,50 @@ enum HostSheet {
         auth.selectItem(at: host?.sshAuth == .password ? 1 : 0)
         auth.toolTip = "With a key or certificate, ssh never asks for a password, so a fake server can't ask for one either. A password is asked in a window and can be saved in the Keychain."
         var identity = host?.identityFile ?? ""
-        let keyName = NSTextField(labelWithString: "")
-        keyName.lineBreakMode = .byTruncatingMiddle
-        keyName.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let choose = NSButton(title: "Choose...", target: nil, action: nil)
-        let clear = NSButton(title: "Any", target: nil, action: nil)
-        clear.toolTip = "Let ssh try your keys"
-        func showKey() {
-            keyName.stringValue = identity.isEmpty ? "Any of your keys" : (identity as NSString).lastPathComponent
-            keyName.toolTip = identity.isEmpty ? nil : identity
-            clear.isEnabled = !identity.isEmpty
-        }
-        showKey()
-        let chooseHandler = PopupHandler {
-            let panel = NSOpenPanel()
-            panel.message = "The private key, not the .pub file. A certificate next to it (-cert.pub) is used too."
-            panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".ssh")
-            panel.showsHiddenFiles = true
-            if panel.runModal() == .OK, let url = panel.url { identity = url.path; showKey() }
-        }
-        let clearHandler = PopupHandler { identity = ""; showKey() }
-        choose.target = chooseHandler
-        choose.action = #selector(PopupHandler.changed)
-        clear.target = clearHandler
-        clear.action = #selector(PopupHandler.changed)
-        let keyRow = NSStackView(views: [keyName, choose, clear])
-        keyRow.spacing = 6
+        // The keys in ~/.ssh, a file elsewhere, or a new one.
+        let keyRow = NSPopUpButton()
         keyRow.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        keyRow.toolTip = "A certificate next to the key (<key>-cert.pub) is used too."
+        var keyPaths: [String] = []
+        func fillKeys() {
+            keyRow.removeAllItems()
+            keyPaths = [""] + SSHKeys.list()
+            if !identity.isEmpty, !keyPaths.contains(identity) { keyPaths.append(identity) }
+            // Through the menu: the popup's own addItem drops equal titles.
+            for path in keyPaths {
+                let name = (path as NSString).lastPathComponent
+                let title = path.isEmpty ? "Any of my keys" : SSHKeys.hasCertificate(path) ? "\(name), with certificate" : name
+                keyRow.menu?.addItem(withTitle: title, action: nil, keyEquivalent: "").toolTip = path.isEmpty ? nil : path
+            }
+            keyRow.menu?.addItem(.separator())
+            keyRow.menu?.addItem(withTitle: "Choose a File...", action: nil, keyEquivalent: "")
+            keyRow.menu?.addItem(withTitle: "Create a New Key...", action: nil, keyEquivalent: "")
+            keyRow.selectItem(at: keyPaths.firstIndex(of: identity) ?? 0)
+        }
+        fillKeys()
+        var sheetWindow: NSWindow?
+        let keyHandler = PopupHandler {
+            let index = keyRow.indexOfSelectedItem
+            if index < keyPaths.count {
+                identity = keyPaths[index]
+            } else if index == keyPaths.count + 1 {
+                let panel = NSOpenPanel()
+                panel.message = "The private key, not the .pub file."
+                panel.directoryURL = SSHKeys.directory
+                panel.showsHiddenFiles = true
+                if panel.runModal() == .OK, let url = panel.url { identity = url.path }
+                fillKeys()
+            } else if let sheetWindow {
+                let base = label.stringValue.isEmpty ? address.stringValue : label.stringValue
+                let suggested = "id_ed25519_" + base.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "-" }
+                KeySheet.present(on: sheetWindow, suggestedName: suggested) { path in
+                    if let path { identity = path }
+                    fillKeys()
+                }
+            }
+        }
+        keyRow.target = keyHandler
+        keyRow.action = #selector(PopupHandler.changed)
 
         var rows: [[NSView]] = [[FormSheet.label("Type"), kind], [FormSheet.label("Address"), address],
                                 [FormSheet.label("Label"), labelRow], [FormSheet.label("Friendly name"), label]]
@@ -1009,6 +1039,7 @@ enum HostSheet {
                  [FormSheet.label("Jump host"), jump],
                  [FormSheet.label("Sign in with"), auth], [FormSheet.label("Key"), keyRow]]
         let sheet = FormSheet(title: host == nil ? "Add a host" : "Edit host", rows: rows)
+        sheetWindow = sheet.window
 
         func layout() {
             let ssh = kind.selectedSegment == 1
@@ -1055,7 +1086,7 @@ enum HostSheet {
         }
 
         show(sheet, on: parent) { accepted in
-            _ = (wellHandler, chooseHandler, clearHandler, layoutHandler)
+            _ = (wellHandler, keyHandler, layoutHandler)
             well.deactivate()
             NSColorPanel.shared.orderOut(nil)
             let trimmed = address.stringValue.trimmingCharacters(in: .whitespaces)
@@ -1084,6 +1115,79 @@ enum HostSheet {
                     : gateways.first(where: \.isDirect)?.id ?? gatewayID
             }
             done(result)
+        }
+    }
+}
+
+/// A new SSH key in ~/.ssh, then its public key to copy.
+enum KeySheet {
+    static func present(on parent: NSWindow, suggestedName: String, done: @escaping (String?) -> Void) {
+        let name = FormSheet.field(suggestedName, placeholder: "id_ed25519_work")
+        let passphrase = NSSecureTextField()
+        passphrase.placeholderString = "Optional, but better"
+        passphrase.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        let again = NSSecureTextField()
+        again.placeholderString = "The same again"
+        again.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        let save = NSButton(checkboxWithTitle: "Save the passphrase in the Keychain", target: nil, action: nil)
+        save.state = .on
+        save.toolTip = "Then iGateway gives it to ssh when ssh asks, the same safe way as passwords."
+        let sheet = FormSheet(title: "Create a new SSH key", rows: [
+            [FormSheet.label("Name"), name],
+            [FormSheet.label("Passphrase"), passphrase],
+            [FormSheet.label("Again"), again],
+            [NSGridCell.emptyContentView, save],
+        ], okTitle: "Create")
+        sheet.validate = {
+            let n = name.stringValue.trimmingCharacters(in: .whitespaces)
+            if !SSHKeys.isValidName(n) { return "The name can have letters, digits, dots, dashes and underscores." }
+            if FileManager.default.fileExists(atPath: SSHKeys.directory.appendingPathComponent(n).path) {
+                return "There's already a key with that name."
+            }
+            if passphrase.stringValue != again.stringValue { return "The passphrases aren't the same." }
+            return nil
+        }
+        show(sheet, on: parent) { accepted in
+            guard accepted else { return done(nil) }
+            do {
+                let path = try SSHKeys.create(name: name.stringValue.trimmingCharacters(in: .whitespaces),
+                                              passphrase: passphrase.stringValue)
+                if !passphrase.stringValue.isEmpty, save.state == .on {
+                    Keychain.setPassword(passphrase.stringValue, for: SSHKeys.keychainKey(path), description: "SSH key passphrase")
+                }
+                AppLog.write("Created the SSH key \(path)")
+                done(path)
+                PublicKeySheet.present(on: parent, path: path)
+            } catch {
+                done(nil)
+                let alert = NSAlert()
+                alert.messageText = "The key could not be made"
+                if case SSHKeys.Problem.failed(let message) = error { alert.informativeText = message }
+                alert.beginSheetModal(for: parent)
+            }
+        }
+    }
+}
+
+/// A key's public half, to put on servers or have signed.
+enum PublicKeySheet {
+    static func present(on window: NSWindow, path: String) {
+        guard let key = SSHKeys.publicKey(path) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Public key of \((path as NSString).lastPathComponent)"
+        alert.informativeText = "Put this on the server for the account you log in as, or have your CA sign it. "
+            + "The private key stays on this Mac."
+        let text = NSTextField(wrappingLabelWithString: key)
+        text.isSelectable = true
+        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        text.frame = NSRect(origin: .zero, size: text.sizeThatFits(NSSize(width: 360, height: 400)))
+        alert.accessoryView = text
+        alert.addButton(withTitle: "Copy")
+        alert.addButton(withTitle: "Done")
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(key, forType: .string)
         }
     }
 }
