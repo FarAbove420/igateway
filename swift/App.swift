@@ -156,6 +156,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
     @objc func importHosts() { controller.launcherWindow().importHosts() }
 
     @objc func exportHosts() { controller.launcherWindow().exportHosts() }
+
+    @objc func createSSHKey() { controller.launcherWindow().createSSHKey() }
+
+    @objc func openSSHFolder() { SSHKeys.openFolder() }
 }
 
 /// What the Window menu's own items call.
@@ -165,6 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
     /// Only the main app has a host list to import into.
     @objc optional func importHosts()
     @objc optional func exportHosts()
+    @objc optional func createSSHKey()
+    @objc optional func openSSHFolder()
 }
 
 /// The menu bar, for the main app and for session processes. The app's name
@@ -193,6 +199,9 @@ func installMainMenu(target: MenuTarget) {
         let file = NSMenu(title: "File")
         file.addItem(withTitle: "Import Hosts...", action: #selector(MenuTarget.importHosts), keyEquivalent: "").target = target
         file.addItem(withTitle: "Export Hosts...", action: #selector(MenuTarget.exportHosts), keyEquivalent: "").target = target
+        file.addItem(.separator())
+        file.addItem(withTitle: "Create SSH Key...", action: #selector(MenuTarget.createSSHKey), keyEquivalent: "").target = target
+        file.addItem(withTitle: "Open SSH Keys Folder", action: #selector(MenuTarget.openSSHFolder), keyEquivalent: "").target = target
         fileItem.submenu = file
         main.addItem(fileItem)
     }

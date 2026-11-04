@@ -6,7 +6,7 @@
 //  certificate for it is <key>-cert.pub, which ssh uses by itself.
 //
 
-import Foundation
+import AppKit
 
 enum SSHKeys {
     static var directory: URL { URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".ssh", isDirectory: true) }
@@ -19,6 +19,16 @@ enum SSHKeys {
             !name.hasSuffix(".pub") && !name.hasPrefix(".")
                 && fm.fileExists(atPath: directory.appendingPathComponent(name + ".pub").path)
         }.sorted().map { directory.appendingPathComponent($0).path }
+    }
+
+    /// ~/.ssh in the Finder, made first if it isn't there yet (only you
+    /// can open it, as ssh wants).
+    static func openFolder() {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: directory.path) {
+            try? fm.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        }
+        NSWorkspace.shared.open(directory)
     }
 
     static func hasCertificate(_ path: String) -> Bool {

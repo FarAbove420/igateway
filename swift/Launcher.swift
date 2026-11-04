@@ -425,6 +425,12 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         }
     }
 
+    /// From the File menu: a key on its own, not for one host.
+    func createSSHKey() {
+        guard let window else { return }
+        KeySheet.present(on: window, suggestedName: "id_ed25519") { [weak self] _ in self?.showSelection() }
+    }
+
     @objc private func showPublicKey() {
         guard let host = selectedHost, !host.identityFile.isEmpty, let window else { return }
         PublicKeySheet.present(on: window, path: host.identityFile)

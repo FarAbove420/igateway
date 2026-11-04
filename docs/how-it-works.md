@@ -30,8 +30,10 @@ builder's own folders out of the app. Nothing is ever installed in
 into one executable that only needs macOS itself. `BUNDLE_ID=...` gives your
 own builds their own bundle identifier.
 
-The icons, an apple for the app and a PC for each session, are drawn by
-`icon/make-icon.swift`; `icon/make-icon.zsh` rebuilds the `.icns` files.
+The app's icon is the artwork in `icon/AppIcon-art.webp`: `icon/make-icon.swift`
+cuts its tile out of the black around it and puts it on Apple's icon grid.
+The PC for each session is drawn there too. `icon/make-icon.zsh` rebuilds
+the `.icns` files.
 
 ## Where things are kept
 
