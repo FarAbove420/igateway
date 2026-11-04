@@ -27,7 +27,6 @@ INCLUDES=(-I "$ROOT/bridge" -I "$DEPS/include/freerdp3" -I "$DEPS/include/winpr3
 CFLAGS=(-arch arm64 -mmacosx-version-min=13.0 -Wno-deprecated-declarations -O1)
 LINK=(
   "$DEPS/lib/libfreerdp-client3.a" "$DEPS/lib/libfreerdp3.a" "$DEPS/lib/libwinpr3.a" "$DEPS"/lib/freerdp3/*.a
-  "$DEPS/lib/libavcodec.a" "$DEPS/lib/libswscale.a" "$DEPS/lib/libavutil.a"
   "$DEPS/lib/libssl.a" "$DEPS/lib/libcrypto.a" "$DEPS/lib/libSwiftTerm.a" "$(xcrun --show-sdk-path)/usr/lib/libz.tbd"
   -framework Metal -framework MetalKit -framework CoreText
   -framework Carbon -framework IOSurface -framework AVFoundation -framework AudioToolbox -framework CoreAudio

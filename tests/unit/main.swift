@@ -340,7 +340,7 @@ if let frame = encodeRedFrame(width: 64, height: 64) {
     var decodedPixels = [UInt8](repeating: 0, count: 64 * 64 * 4)
     let status = frame.withUnsafeBytes { shim_h264_decode($0.baseAddress!.assumingMemoryBound(to: UInt8.self),
                                                            UInt32(frame.count), 64, 64, &decodedPixels) }
-    check("FreeRDP decodes H.264 with the built-in FFmpeg", status >= 0, "status \(status)")
+    check("FreeRDP decodes H.264 with Apple's VideoToolbox", status >= 0, "status \(status)")
     let center = (32 * 64 + 32) * 4
     let (b, g, r) = (decodedPixels[center], decodedPixels[center + 1], decodedPixels[center + 2])
     check("and the red frame comes out red", r > 200 && g < 60 && b < 60, "BGR \(b) \(g) \(r)")

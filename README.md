@@ -16,7 +16,7 @@ with one Dock icon per server. It behaves like a Mac app.
   follows. Cmd-C and Cmd-V, the Mac's scroll direction and your keyboard
   layout just work.
 - **Copy and paste** text, images and files, both ways. Sound, a shared
-  folder, and H.264 video.
+  folder, and H.264 video through macOS's own decoder.
 - **Certificates you can check.** One that neither FreeRDP nor macOS can
   verify is shown to you before you log in.
 - **Plain error messages.** A failed connection says which step went wrong:
@@ -73,7 +73,7 @@ it under System Settings, Privacy & Security.
    ```
 
 3. Build and install it. The first time, this also downloads FreeRDP,
-   OpenSSL, FFmpeg and SwiftTerm, checks each against a pinned SHA-256 and
+   OpenSSL and SwiftTerm, checks each against a pinned SHA-256 and
    builds them, which takes a few minutes.
 
    ```bash
@@ -110,7 +110,6 @@ are.
 
 - Remote Desktop logins use NTLM; Kerberos isn't supported.
 - No smartcards, printers, microphone, USB devices or multiple monitors.
-- H.264 video is decoded in software.
 - SSH hosts can't go through an RD Gateway, which only carries Remote
   Desktop. Use a jump host instead.
 
@@ -122,7 +121,6 @@ iGateway stands on the shoulders of these projects:
   protocol (Apache 2.0)
 - [OpenSSL](https://www.openssl.org) for TLS and the login cryptography
   (Apache 2.0)
-- [FFmpeg](https://ffmpeg.org) for H.264 decoding (LGPL 2.1 or later)
 - [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) for the terminal
   (MIT), which builds on [xterm.js](https://github.com/xtermjs/xterm.js)
   and has a part ported from [libsixel](https://github.com/saitoha/libsixel)

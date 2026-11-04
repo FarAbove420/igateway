@@ -40,11 +40,6 @@ check "OpenSSL $openssl_series.x" "$(pinned OPENSSL_VERSION)" \
   "$(git ls-remote --tags --refs https://github.com/openssl/openssl.git "refs/tags/openssl-$openssl_series.*" |
      sed 's|.*refs/tags/openssl-||' | grep -E '^[0-9]+(\.[0-9]+)+$' | sort -V | tail -1)" \
   https://github.com/openssl/openssl/releases
-# FFmpeg publishes no GitHub releases: its release tags are n<version>.
-check FFmpeg "$(pinned FFMPEG_VERSION)" \
-  "$(git ls-remote --tags --refs https://github.com/FFmpeg/FFmpeg.git 'refs/tags/n*' |
-     sed 's|.*refs/tags/n||' | grep -E '^[0-9]+(\.[0-9]+)+$' | sort -V | tail -1)" \
-  https://ffmpeg.org/download.html
 check SwiftTerm "$(pinned SWIFTTERM_VERSION)" "$(latest_release migueldeicaza/SwiftTerm | sed 's/^v//')" \
   https://github.com/migueldeicaza/SwiftTerm/releases
 check CMake "$(pinned CMAKE_VERSION)" "$(latest_release Kitware/CMake | sed 's/^v//')" \

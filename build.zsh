@@ -2,9 +2,9 @@
 #
 # Builds "iGateway.exe.app".
 #
-# Links FreeRDP, FFmpeg's H.264 decoder and OpenSSL statically from
-# deps/out, so the app needs nothing installed on the Mac it runs on. Build those first, once:
-#   ./deps/build-deps.zsh
+# Links FreeRDP, OpenSSL and SwiftTerm statically from deps/out, so the app
+# needs nothing installed on the Mac it runs on. It builds those first, with
+# deps/build-deps.zsh, when they are missing or out of date.
 #
 # Usage:
 #   ./build.zsh              build into ./build.noindex
@@ -24,7 +24,7 @@ APP_NAME="iGateway.exe"
 APP="$BUILD_DIR/${APP_NAME}.app"
 EXEC_NAME="igateway"
 BUNDLE_ID="${BUNDLE_ID:-io.github.farabove420.igateway}"
-VERSION="0.6.1"
+VERSION="0.7.0"
 
 INSTALL=0
 for arg in "$@"; do
@@ -65,12 +65,12 @@ swiftc -O -parse-as-library \
   "$BUILD_DIR/rdpbridge.o" \
   "$DEPS/lib/libfreerdp-client3.a" "$DEPS/lib/libfreerdp3.a" "$DEPS/lib/libwinpr3.a" \
   "$DEPS"/lib/freerdp3/*.a \
-  "$DEPS/lib/libavcodec.a" "$DEPS/lib/libswscale.a" "$DEPS/lib/libavutil.a" \
   "$DEPS/lib/libssl.a" "$DEPS/lib/libcrypto.a" "$DEPS/lib/libSwiftTerm.a" \
   "$(xcrun --show-sdk-path)/usr/lib/libz.tbd" \
   -framework Carbon -framework IOSurface -framework AVFoundation -framework AudioToolbox -framework CoreAudio \
   -framework Security -framework SystemConfiguration -framework IOKit -framework CoreFoundation \
   -framework Metal -framework MetalKit -framework CoreText \
+  -framework VideoToolbox -framework CoreMedia -framework CoreVideo \
   -o "$APP/Contents/MacOS/$EXEC_NAME"
 
 chmod 755 "$APP/Contents/MacOS/$EXEC_NAME"
@@ -133,7 +133,7 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 # The licences of what is compiled in travel with the app.
 cp "$SRC_DIR/LICENSE" "$SRC_DIR/THIRD_PARTY_NOTICES.md" "$APP/Contents/Resources/" 2>/dev/null || true
-cp "$DEPS/share/FFmpeg-LGPL-2.1.txt" "$DEPS/share/SwiftTerm-LICENSE.txt" "$APP/Contents/Resources/" 2>/dev/null || true
+cp "$DEPS/share/SwiftTerm-LICENSE.txt" "$APP/Contents/Resources/" 2>/dev/null || true
 
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || \
   print "note: ad-hoc code signing was skipped."

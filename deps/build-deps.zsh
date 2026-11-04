@@ -1,15 +1,14 @@
 #!/bin/zsh
 #
 # Builds what iGateway.exe links against, from source, as static libraries
-# in deps/out: OpenSSL, FFmpeg's H.264 decoder, FreeRDP, then SwiftTerm for
-# SSH sessions. Needs only the Xcode Command Line Tools.
+# in deps/out: OpenSSL, FreeRDP, then SwiftTerm for SSH sessions. Needs only
+# the Xcode Command Line Tools.
 # CMake is downloaded for the build and is not part of the app.
 #
 # Every download is checked against a pinned SHA-256.
 #
-# A different FreeRDP or FFmpeg source instead of the release (rarely needed):
+# A different FreeRDP source instead of the release (rarely needed):
 #   FREERDP_SOURCE=~/src/FreeRDP ./deps/build-deps.zsh
-#   FFMPEG_SOURCE=~/src/FFmpeg ./deps/build-deps.zsh
 #
 # --test-server also builds FreeRDP's sample server into deps/out/bin, for
 # the integration test. It is never part of the app.
@@ -46,10 +45,6 @@ CMAKE_VERSION="4.4.5"
 CMAKE_SHA256="679e77a96b9ef9484cc6c1445255fc4f84206b48a65420efbedf16bdab55fbff"
 OPENSSL_VERSION="3.6.5"
 OPENSSL_SHA256="a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98"
-# ffmpeg.org publishes signatures, not checksums. This SHA-256 matches the one
-# Homebrew publishes for the same file.
-FFMPEG_VERSION="9.0.2"
-FFMPEG_SHA256="8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
 FREERDP_VERSION="3.33.0"
 FREERDP_SHA256="80cbcf17a7de00909f2be805c7d93764596cd712046addc18c30594137c0b879"
 # GitHub publishes no checksum for a tag's source archive. This is the SHA-256
@@ -134,50 +129,10 @@ if [[ ! -f "$OPENSSL_STAMP" ]]; then
   touch "$OPENSSL_STAMP"
 fi
 
-# --- FFmpeg ------------------------------------------------------------------
-# Only the H.264 decoder, which FreeRDP uses for the AVC420 and AVC444 codecs
-# Windows prefers, and swscale, which FreeRDP's H.264 code includes. No GPL parts, so it stays LGPL. --disable-autodetect keeps it
-# from picking up anything installed on the Mac.
-
-if [[ -n "${FFMPEG_SOURCE:-}" ]]; then
-  FFMPEG_SRC="${FFMPEG_SOURCE:A}"
-  FFMPEG_ID="custom"
-  rm -f "$OUT"/.ffmpeg-*(N)
-else
-  fetch "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" "$FFMPEG_SHA256"
-  FFMPEG_SRC="$BUILD/ffmpeg-src"
-  FFMPEG_ID="$FFMPEG_VERSION"
-fi
-FFMPEG_STAMP="$OUT/.ffmpeg-$FFMPEG_ID"
-if [[ "$FFMPEG_ID" == custom || ! -f "$FFMPEG_STAMP" ]]; then
-  print "Building FFmpeg ($FFMPEG_ID, H.264 decoder only)..."
-  if [[ "$FFMPEG_ID" != custom ]]; then
-    unpack "$DOWNLOADS/ffmpeg-$FFMPEG_VERSION.tar.xz" "ffmpeg-$FFMPEG_VERSION" "$FFMPEG_SRC"
-  fi
-  rm -rf "$BUILD/ffmpeg" "$BUILD/ffmpeg.log"
-  mkdir -p "$BUILD/ffmpeg"
-  cd "$BUILD/ffmpeg"
-  step ffmpeg.log "$FFMPEG_SRC/configure" --prefix="$PREFIX" --libdir="$PREFIX/lib" \
-    --enable-static --disable-shared --disable-autodetect \
-    --disable-programs --disable-doc --disable-network \
-    --disable-everything --enable-decoder=h264 --enable-parser=h264 \
-    --disable-avdevice --disable-avformat --disable-avfilter --disable-swresample \
-    --arch=arm64 --target-os=darwin --cc=clang \
-    --extra-cflags="-mmacosx-version-min=$MACOS_MIN" --extra-ldflags="-mmacosx-version-min=$MACOS_MIN"
-  step ffmpeg.log make -j"$JOBS"
-  step ffmpeg.log make install DESTDIR="$STAGE-ffmpeg"
-  collect "$STAGE-ffmpeg"
-  # The LGPL text travels with the app; build.zsh copies it in.
-  mkdir -p "$OUT/share"
-  cp "$FFMPEG_SRC/COPYING.LGPLv2.1" "$OUT/share/FFmpeg-LGPL-2.1.txt"
-  cd "$DEPS"
-  rm -f "$OUT"/.ffmpeg-*(N)
-  [[ "$FFMPEG_ID" == custom ]] || touch "$FFMPEG_STAMP"
-fi
-
 # --- FreeRDP -----------------------------------------------------------------
-# Static libraries with the client channels built in. FFmpeg only for H.264
-# video; audio stays with FreeRDP's own codecs. No X11, SDL, CUPS, PC/SC,
+# Static libraries with the client channels built in. H.264 video through
+# Apple's VideoToolbox, which leaves hardware or software decoding to macOS;
+# audio stays with FreeRDP's own codecs. No FFmpeg, X11, SDL, CUPS, PC/SC,
 # Kerberos or JSON.
 # NTLM needs MD4 and RC4, which OpenSSL 3 keeps in its "legacy" module, a
 # separate file a static build does not have. FreeRDP's own copies stand in.
@@ -229,15 +184,11 @@ FREERDP_OPTIONS=(
   -DWITH_CHANNELS=ON
   -DWITH_CLIENT_CHANNELS=ON
   -DWITH_MACAUDIO=ON
-  -DWITH_FFMPEG=ON
+  -DWITH_APPLE_VIDEOTOOLBOX=ON
+  -DWITH_FFMPEG=OFF
   -DWITH_DSP_FFMPEG=OFF
-  -DWITH_VIDEO_FFMPEG=ON
-  -DWITH_FFMPEG_HWACCEL=OFF
-  # New in FreeRDP 3.33 and on by default on macOS: H.264 through Apple's
-  # VideoToolbox instead of FFmpeg. Off until it has been tried on its own.
-  -DWITH_APPLE_VIDEOTOOLBOX=OFF
-  -DWITH_SWSCALE=ON
-  -DWITH_SWSCALE_LOADING=OFF
+  -DWITH_VIDEO_FFMPEG=OFF
+  -DWITH_SWSCALE=OFF
   -DWITH_CAIRO=OFF
   -DWITH_OPENH264=OFF
   -DWITH_X11=OFF
