@@ -36,7 +36,7 @@ if ! codesign --verify --deep --strict "$APP" 2>/dev/null; then
   print -u2 "The app's signature does not verify. Not packing it."
   exit 1
 fi
-for file in LICENSE THIRD_PARTY_NOTICES.md FFmpeg-LGPL-2.1.txt; do
+for file in LICENSE THIRD_PARTY_NOTICES.md SwiftTerm-LICENSE.txt; do
   if [[ ! -f "$APP/Contents/Resources/$file" ]]; then
     print -u2 "$file is missing from the app. Not packing it."
     exit 1

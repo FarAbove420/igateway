@@ -169,7 +169,7 @@ extension NSApplication {
                                                    .foregroundColor: NSColor.secondaryLabelColor]
         let credits = NSMutableAttributedString(string: "Built on ", attributes: style)
         let projects = [("FreeRDP", "https://github.com/FreeRDP/FreeRDP"), ("OpenSSL", "https://www.openssl.org"),
-                        ("FFmpeg", "https://ffmpeg.org"), ("SwiftTerm", "https://github.com/migueldeicaza/SwiftTerm")]
+                        ("SwiftTerm", "https://github.com/migueldeicaza/SwiftTerm")]
         for (index, (title, link)) in projects.enumerated() {
             var attributes = style
             attributes[.link] = URL(string: link)

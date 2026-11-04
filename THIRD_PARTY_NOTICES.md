@@ -29,20 +29,6 @@ TLS and the cryptography FreeRDP uses to log in.
 - Apache License 2.0, the same text as `LICENSE`. Copyright the OpenSSL
   Project Authors.
 
-### FFmpeg
-
-Decodes the H.264 video a Windows server can send.
-
-- https://ffmpeg.org, version 9.0.2: libavcodec (the H.264 decoder only),
-  libavutil and libswscale
-- GNU Lesser General Public License 2.1 or later. Built without the GPL and
-  non-free parts (`CONFIG_GPL 0`, `CONFIG_NONFREE 0`). The app carries the
-  licence text as `FFmpeg-LGPL-2.1.txt`.
-- Source: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
-- Linked statically. Everything needed to rebuild and relink the app against
-  a modified FFmpeg is in this repository (https://github.com/FarAbove420/igateway):
-  `FFMPEG_SOURCE=/path/to/FFmpeg ./deps/build-deps.zsh`, then `./build.zsh`.
-
 ### SwiftTerm
 
 The terminal of SSH sessions.
@@ -167,4 +153,5 @@ SPDX-License-Identifier: Unicode-3.0
 - **CMake**, https://cmake.org (BSD 3-Clause): downloaded by
   `deps/build-deps.zsh` to build FreeRDP, and not part of the app.
 
-Nothing else is linked besides frameworks and libraries that ship with macOS.
+Nothing else is linked besides frameworks and libraries that ship with macOS,
+such as VideoToolbox, which decodes the H.264 video.

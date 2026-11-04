@@ -5,24 +5,24 @@ The details behind the README. The app is AppKit plus a small C bridge
 
 ## Building
 
-`deps/build-deps.zsh` builds four libraries as static libraries in
+`deps/build-deps.zsh` builds three libraries as static libraries in
 `deps/out`, all for Apple Silicon and macOS 13:
 
 - **OpenSSL 3.6.5**, which FreeRDP uses for TLS, NLA and certificates.
   FreeRDP's own build files say only OpenSSL is tested on each release, and
   macOS has no OpenSSL to link against.
-- **FFmpeg 9.0.2**, only the H.264 decoder and swscale, for the H.264
-  (AVC420 and AVC444) video Windows sends. Built without FFmpeg's GPL and
-  non-free parts, so it stays LGPL.
-- **FreeRDP 3.33.0**, with the client channels built in.
+- **FreeRDP 3.33.0**, with the client channels built in. The H.264 video
+  Windows sends (AVC420 and AVC444) goes through Apple's VideoToolbox,
+  FreeRDP's own decoder for it since 3.33, which leaves hardware or software
+  decoding to macOS. That replaced FFmpeg: one library less to build and
+  keep current, and no LGPL code in the app.
 - **SwiftTerm 1.20.0**, the terminal of SSH sessions, compiled with `swiftc`
   directly: no Swift package manager, no Xcode.
 
 It also downloads CMake to build FreeRDP; CMake is not part of the app. Each
-download is checked against its SHA-256: the one the project publishes, for
-FFmpeg, which publishes signatures instead, the one Homebrew publishes for the
-same file, and for SwiftTerm, whose GitHub archive has none, the one of the
-archive as first downloaded.
+download is checked against its SHA-256: the one the project publishes, and
+for SwiftTerm, whose GitHub archive has none, the one of the archive as first
+downloaded.
 
 `build.zsh` runs it by itself when the libraries are missing, or when
 `build-deps.zsh` or the Swift compiler changed since the last run:
