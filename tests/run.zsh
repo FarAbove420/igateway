@@ -50,6 +50,15 @@ build() {
     return 1
   fi
 }
+# --screenshots: only renders the README's screenshots into docs/, from
+# example data in a home folder of their own.
+if [[ "${1:-}" == "--screenshots" ]]; then
+  export CFFIXED_USER_HOME="$OUT/screenshot-home"
+  mkdir -p "$CFFIXED_USER_HOME"
+  build screenshots "$ROOT/bridge/rdpbridge.h" || exit 1
+  "$OUT/screenshots" "$ROOT/docs"
+  exit
+fi
 build unit "$TESTS/unit/shim.h" "$OUT/shim.o" || exit 1
 build input "$ROOT/bridge/rdpbridge.h" || exit 1
 build session "$ROOT/bridge/rdpbridge.h" || exit 1

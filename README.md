@@ -2,37 +2,50 @@
 
 # iGateway.exe
 
-A Remote Desktop and SSH client for the Mac: Windows servers behind an RD
-Gateway or reached directly, and SSH to servers and switches. Built on
-[FreeRDP](https://github.com/FreeRDP/FreeRDP) and the Mac's own ssh, but it
-behaves like a Mac app.
+A Remote Desktop and SSH client for the Mac. Windows servers behind an RD
+Gateway or reached directly, and SSH to servers and switches, in one list,
+with one Dock icon per server. It behaves like a Mac app.
 
-![The host list](docs/screenshot.png)
+![The host list: servers grouped per RD Gateway and jump host, with recent connections](docs/screenshot.png)
 
-## Features
+## Remote Desktop
 
-- **Gateways.** Servers are grouped per RD Gateway, each with its own account.
-  Servers without a gateway go under "Direct connections".
-- **SSH too.** SSH hosts open in a terminal window of their own, through the
-  Mac's own ssh. Fill in a jump host and the hosts behind it are grouped
-  under it. Pick your font, size and text colour.
-- **Keys made easy.** File, Create SSH Key makes one, with a passphrase
-  saved in the Keychain if you like, and shows the public key to copy.
+- **Gateways.** Servers are grouped per RD Gateway, each with its own
+  account. Servers without one go under "Direct connections".
+- **Feels like a Mac.** Resize the window or go fullscreen and Windows
+  follows. Cmd-C and Cmd-V, the Mac's scroll direction and your keyboard
+  layout just work.
+- **Copy and paste** text, images and files, both ways. Sound, a shared
+  folder, and H.264 video.
+- **Certificates you can check.** One that neither FreeRDP nor macOS can
+  verify is shown to you before you log in.
+- **Plain error messages.** A failed connection says which step went wrong:
+  the gateway, the login, or the server.
+
+## SSH
+
+![An SSH session](docs/terminal.png)
+
+- **A terminal per server**, running the Mac's own ssh. Pick the font, size
+  and text colour.
+- **Jump hosts.** Fill in a host's jump host and it's grouped under it. The
+  jump leg gets the same key and settings as the server behind it.
+- **Keys.** File, Create SSH Key makes one and shows the public key to copy.
   A certificate next to a key is used by itself.
-- **A Dock icon per server.** Every session is its own app, with the server's
-  label on its icon in a colour you pick, so switching is one click.
-- **Recent connections.** What you connected to, for how long, and why
+- **Passwords and passphrases** can be saved in the Keychain. They go to ssh
+  through its own password helper, never through the terminal, so text a
+  server prints can't catch them.
+- **Locked down.** No agent or X11 forwarding, host keys are always checked,
+  and a host with a key never falls back to a password. A server can't read
+  or change your clipboard.
+
+## Everywhere
+
+- **A Dock icon per server.** Every session is its own app, with the
+  server's label on its icon in a colour you pick.
+- **Recent connections:** what you connected to, for how long, and why
   something failed.
-- **Feels like a Mac.** Resize the window or go fullscreen and Windows follows.
-  Cmd-C and Cmd-V, the Mac's scroll direction and your keyboard layout just
-  work.
-- **Copy and paste** text, images and files, both ways.
-- **Safe by default.** Passwords go in the Keychain. A server certificate that
-  neither FreeRDP nor macOS can verify is shown to you before you log in.
-  SSH passwords and passphrases reach ssh through its own password helper,
-  never through the terminal, and a server can't touch your clipboard.
-- Sound, a shared folder, and export and import of your server list (never
-  passwords or accounts).
+- **Export and import** your server list, never passwords or accounts.
 
 ## Install
 
@@ -53,8 +66,8 @@ later. No Homebrew needed.
    cd igateway
    ```
 
-3. Build FreeRDP, OpenSSL, FFmpeg's H.264 decoder and SwiftTerm. This
-   downloads them, checks each against a pinned SHA-256 and builds them into
+3. Build the libraries it uses. This downloads FreeRDP, OpenSSL, FFmpeg and
+   SwiftTerm, checks each against a pinned SHA-256 and builds them into
    `deps/out`. It takes a few minutes and only has to run once.
 
    ```bash
@@ -85,40 +98,59 @@ git pull
 ## Your data
 
 - Servers and settings: `~/Library/Application Support/iGateway/config.json`
-- Passwords and key passphrases: your login Keychain, only when you choose to
-  save them
+- Passwords and key passphrases: your login Keychain, only when you choose
+  to save them
 - SSH keys: `~/.ssh`, the Mac's usual place (File, Open SSH Keys Folder)
 - Logs: `~/Library/Logs/iGateway`, or Window, Show Logs. Never passwords.
 
-To remove iGateway, delete the app, those two folders and
-`~/Library/Caches/iGateway`. Saved passwords are in Keychain Access under
-"iGateway.exe".
+To remove iGateway, delete the app, `~/Library/Application Support/iGateway`,
+`~/Library/Logs/iGateway` and `~/Library/Caches/iGateway`. Saved passwords
+are in Keychain Access under "iGateway.exe". Your SSH keys stay where they
+are.
 
 ## Limits
 
-- Logins use NTLM; Kerberos isn't supported.
+- Remote Desktop logins use NTLM; Kerberos isn't supported.
 - No smartcards, printers, microphone, USB devices or multiple monitors.
 - H.264 video is decoded in software.
 - SSH hosts can't go through an RD Gateway, which only carries Remote
   Desktop. Use a jump host instead.
 
+## Built with
+
+iGateway stands on the shoulders of these projects:
+
+- [FreeRDP](https://github.com/FreeRDP/FreeRDP) for the Remote Desktop
+  protocol (Apache 2.0)
+- [OpenSSL](https://www.openssl.org) for TLS and the login cryptography
+  (Apache 2.0)
+- [FFmpeg](https://ffmpeg.org) for H.264 decoding (LGPL 2.1 or later)
+- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) for the terminal
+  (MIT), which builds on [xterm.js](https://github.com/xtermjs/xterm.js)
+  and has a part ported from [libsixel](https://github.com/saitoha/libsixel)
+  (both MIT)
+- [Unicode](https://www.unicode.org) data, for time zones and character
+  widths (Unicode License V3)
+- [OpenSSH](https://www.openssh.com), the ssh that comes with macOS
+- [CMake](https://cmake.org), to build FreeRDP
+
+The details and licence texts are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and in the app under
+iGateway.exe, Acknowledgements.
+
 ## What's in here
 
-- `swift/`: the app (window, host list, sessions, SSH terminal, clipboard,
-  keyboard)
+- `swift/`: the app (host list, sessions, SSH terminal, clipboard, keyboard)
 - `bridge/`: a small C layer between the app and FreeRDP
-- `deps/build-deps.zsh`: downloads and builds FreeRDP, OpenSSL, FFmpeg and SwiftTerm
+- `deps/build-deps.zsh`: downloads and builds the libraries
 - `build.zsh`: builds the app; `release.zsh`: packs it for a release
-- `tests/`: the tests, run with `tests/run.zsh`
-- `icon/`: the icons: the app's artwork, and the code that puts it on Apple's
-  icon grid and draws the session icon
-- `docs/`: how it works, and the images in this README
+- `tests/`: the tests, run with `tests/run.zsh`; `tests/run.zsh --screenshots`
+  renders the images in this README
+- `icon/`: the app's artwork, and the code that puts it on Apple's icon grid
+  and draws the session icon
+- `docs/`: [how it works, and why](docs/how-it-works.md), and the images here
 - `.github/workflows/`: builds and tests every push on GitHub
 
-## More
+## License
 
-- [How it works, and why](docs/how-it-works.md)
-- Tests: `./tests/run.zsh`
-- License: Apache 2.0. FreeRDP and OpenSSL are Apache 2.0 too, FFmpeg's
-  decoder is LGPL 2.1 or later, SwiftTerm is MIT. See
-  [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Apache 2.0, see [LICENSE](LICENSE).

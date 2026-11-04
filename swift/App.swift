@@ -162,6 +162,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
     @objc func openSSHFolder() { SSHKeys.openFolder() }
 }
 
+extension NSApplication {
+    /// The standard About panel, with the projects the app is built on.
+    @objc func showAboutWithCredits(_ sender: Any?) {
+        let style: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11),
+                                                   .foregroundColor: NSColor.secondaryLabelColor]
+        let credits = NSMutableAttributedString(string: "Built on ", attributes: style)
+        let projects = [("FreeRDP", "https://github.com/FreeRDP/FreeRDP"), ("OpenSSL", "https://www.openssl.org"),
+                        ("FFmpeg", "https://ffmpeg.org"), ("SwiftTerm", "https://github.com/migueldeicaza/SwiftTerm")]
+        for (index, (title, link)) in projects.enumerated() {
+            var attributes = style
+            attributes[.link] = URL(string: link)
+            credits.append(NSAttributedString(string: title, attributes: attributes))
+            credits.append(NSAttributedString(string: index == projects.count - 2 ? " and " : index < projects.count - 1 ? ", " : "",
+                                              attributes: style))
+        }
+        credits.append(NSAttributedString(string: ", with Unicode data, and the Mac's own OpenSSH. "
+                                          + "Their licences are under Acknowledgements.", attributes: style))
+        credits.setAlignment(.center, range: NSRange(location: 0, length: credits.length))
+        orderFrontStandardAboutPanel(options: [.credits: credits])
+    }
+
+    /// The third-party notices that travel with the app.
+    @objc func showAcknowledgements(_ sender: Any?) {
+        let app = Bundle.main.object(forInfoDictionaryKey: SessionBundle.appKey) as? String ?? Bundle.main.bundlePath
+        let notices = URL(fileURLWithPath: app).appendingPathComponent("Contents/Resources/THIRD_PARTY_NOTICES.md")
+        guard FileManager.default.fileExists(atPath: notices.path) else { return }
+        NSWorkspace.shared.open([notices], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
+                                configuration: NSWorkspace.OpenConfiguration())
+    }
+}
+
 /// What the Window menu's own items call.
 @objc protocol MenuTarget: NSObjectProtocol {
     func showHosts()
@@ -182,7 +213,9 @@ func installMainMenu(target: MenuTarget) {
     let appItem = NSMenuItem()
     let appMenu = NSMenu()
     appMenu.addItem(withTitle: "About \(name)",
-                    action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+                    action: #selector(NSApplication.showAboutWithCredits(_:)), keyEquivalent: "")
+    appMenu.addItem(withTitle: "Acknowledgements",
+                    action: #selector(NSApplication.showAcknowledgements(_:)), keyEquivalent: "")
     appMenu.addItem(.separator())
     appMenu.addItem(withTitle: "Hide \(name)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     let others = appMenu.addItem(withTitle: "Hide Others",
