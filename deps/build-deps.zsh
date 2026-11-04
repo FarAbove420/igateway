@@ -203,6 +203,10 @@ fi
 print "Building FreeRDP ($FREERDP_ID)..."
 rm -f "$BUILD/freerdp.log"
 FREERDP_OPTIONS=(
+  # FreeRDP takes its version from a git tag when it finds one. Its source
+  # sits inside this repository, so on a release tag it took ours (v0.6.0 as
+  # FreeRDP 0, headers in include/freerdp0). Off: the release's own version.
+  -DUSE_VERSION_FROM_GIT_TAG=OFF
   -DCMAKE_BUILD_TYPE=Release
   -DCMAKE_OSX_ARCHITECTURES=arm64
   -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN"
@@ -330,7 +334,8 @@ if (( TEST_SERVER )); then
 fi
 
 # What build.zsh looks for: built by this very file with this compiler.
-DEPS_ID="$(cat "${0:A}" <(swiftc --version 2>&1) | shasum | cut -c1-16)"
+# $DEPS, not $0: this folder has been left by now, and $0 may be relative.
+DEPS_ID="$(cat "$DEPS/build-deps.zsh" <(swiftc --version 2>&1) | shasum | cut -c1-16)"
 rm -f "$OUT"/.deps-*(N)
 touch "$OUT/.deps-$DEPS_ID"
 print "Done: $OUT"
