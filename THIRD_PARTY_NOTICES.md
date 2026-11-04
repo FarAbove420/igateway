@@ -12,7 +12,7 @@ projects ships a NOTICE file.
 The Remote Desktop protocol: connecting, the RD Gateway, graphics, sound,
 clipboard and the shared folder.
 
-- https://github.com/FreeRDP/FreeRDP, version 3.32.2
+- https://github.com/FreeRDP/FreeRDP, version 3.33.0
 - Apache License 2.0, the same text as `LICENSE`. Copyright the FreeRDP
   contributors.
 - Built with FreeRDP's own MD4 and RC4 (`WITH_INTERNAL_MD4`,
