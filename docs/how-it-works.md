@@ -14,7 +14,7 @@ The details behind the README. The app is AppKit plus a small C bridge
 - **FFmpeg 9.0.2**, only the H.264 decoder and swscale, for the H.264
   (AVC420 and AVC444) video Windows sends. Built without FFmpeg's GPL and
   non-free parts, so it stays LGPL.
-- **FreeRDP 3.32.2**, with the client channels built in.
+- **FreeRDP 3.33.0**, with the client channels built in.
 - **SwiftTerm 1.20.0**, the terminal of SSH sessions, compiled with `swiftc`
   directly: no Swift package manager, no Xcode.
 

@@ -42,16 +42,16 @@ STAGE="$BUILD/stage"
 JOBS="$(sysctl -n hw.ncpu)"
 MACOS_MIN="13.0"
 
-CMAKE_VERSION="4.4.4"
-CMAKE_SHA256="4b7b73704b1db9b374e5c9ab8e17ac6148b817b6396ee75cd94a852cbac9d305"
+CMAKE_VERSION="4.4.5"
+CMAKE_SHA256="679e77a96b9ef9484cc6c1445255fc4f84206b48a65420efbedf16bdab55fbff"
 OPENSSL_VERSION="3.6.5"
 OPENSSL_SHA256="a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98"
 # ffmpeg.org publishes signatures, not checksums. This SHA-256 matches the one
 # Homebrew publishes for the same file.
 FFMPEG_VERSION="9.0.2"
 FFMPEG_SHA256="8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
-FREERDP_VERSION="3.32.2"
-FREERDP_SHA256="e95a505c0057e4d06a3b120477c421028769deba4db9c639ef3465d050f0955c"
+FREERDP_VERSION="3.33.0"
+FREERDP_SHA256="80cbcf17a7de00909f2be805c7d93764596cd712046addc18c30594137c0b879"
 # GitHub publishes no checksum for a tag's source archive. This is the SHA-256
 # of the v1.20.0 archive as downloaded on 2026-11-04.
 SWIFTTERM_VERSION="1.20.0"
@@ -203,6 +203,10 @@ fi
 print "Building FreeRDP ($FREERDP_ID)..."
 rm -f "$BUILD/freerdp.log"
 FREERDP_OPTIONS=(
+  # FreeRDP takes its version from a git tag when it finds one. Its source
+  # sits inside this repository, so on a release tag it took ours (v0.6.0 as
+  # FreeRDP 0, headers in include/freerdp0). Off: the release's own version.
+  -DUSE_VERSION_FROM_GIT_TAG=OFF
   -DCMAKE_BUILD_TYPE=Release
   -DCMAKE_OSX_ARCHITECTURES=arm64
   -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN"
@@ -229,6 +233,9 @@ FREERDP_OPTIONS=(
   -DWITH_DSP_FFMPEG=OFF
   -DWITH_VIDEO_FFMPEG=ON
   -DWITH_FFMPEG_HWACCEL=OFF
+  # New in FreeRDP 3.33 and on by default on macOS: H.264 through Apple's
+  # VideoToolbox instead of FFmpeg. Off until it has been tried on its own.
+  -DWITH_APPLE_VIDEOTOOLBOX=OFF
   -DWITH_SWSCALE=ON
   -DWITH_SWSCALE_LOADING=OFF
   -DWITH_CAIRO=OFF
@@ -327,7 +334,8 @@ if (( TEST_SERVER )); then
 fi
 
 # What build.zsh looks for: built by this very file with this compiler.
-DEPS_ID="$(cat "${0:A}" <(swiftc --version 2>&1) | shasum | cut -c1-16)"
+# $DEPS, not $0: this folder has been left by now, and $0 may be relative.
+DEPS_ID="$(cat "$DEPS/build-deps.zsh" <(swiftc --version 2>&1) | shasum | cut -c1-16)"
 rm -f "$OUT"/.deps-*(N)
 touch "$OUT/.deps-$DEPS_ID"
 print "Done: $OUT"
