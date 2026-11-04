@@ -40,6 +40,17 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
     private let shareButton = NSButton(title: "", target: nil, action: nil)
     private let resizeToggle = NSButton(checkboxWithTitle: "Resize Windows with the window", target: nil, action: nil)
     private let connectButton = NSButton(title: "Connect", target: nil, action: nil)
+    // An SSH host shows these instead of the Remote Desktop options.
+    private var sshGrid: NSGridView!
+    private let sshUserValue = NSTextField(labelWithString: "")
+    private let sshPortValue = NSTextField(labelWithString: "")
+    private let sshAuthValue = NSTextField(wrappingLabelWithString: "")
+    private let sshJumpValue = NSTextField(labelWithString: "")
+    // For all SSH sessions.
+    private let fontPopup = NSPopUpButton()
+    private let fontSizePopup = NSPopUpButton()
+    private let textColorWell = NSColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+    private static let fontSizes: [Double] = [10, 11, 12, 13, 14, 15, 16, 18, 20, 24]
     private let history = HistoryPanel(frame: .zero)
     private let headerTitle = NSTextField(labelWithString: "")
     private let headerDetail = NSTextField(labelWithString: "")
@@ -163,12 +174,41 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         connectButton.target = self
         connectButton.action = #selector(connectSelected)
 
-        let details = NSStackView(views: [headerTitle, headerDetail, grid, connectButton])
+        sshAuthValue.preferredMaxLayoutWidth = 380
+        TerminalFont.allCases.forEach { fontPopup.addItem(withTitle: $0.label) }
+        fontPopup.toolTip = "The font of all SSH sessions"
+        fontSizePopup.addItems(withTitles: Self.fontSizes.map { "\(Int($0)) pt" })
+        if #available(macOS 13.0, *) { textColorWell.colorWellStyle = .minimal }
+        textColorWell.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        textColorWell.toolTip = "The text colour of all SSH sessions. Very dark colours are lightened, so text stays readable on black."
+        for control in [fontPopup, fontSizePopup, textColorWell] as [NSControl] {
+            control.target = self
+            control.action = #selector(terminalAppearanceChanged)
+        }
+        let resetColor = NSButton(title: "Default", target: self, action: #selector(resetTerminalTextColor))
+        resetColor.controlSize = .small
+        resetColor.bezelStyle = .rounded
+        sshGrid = NSGridView(views: [
+            [label("User"), sshUserValue],
+            [label("Port"), sshPortValue],
+            [label("Jump host"), sshJumpValue],
+            [label("Sign in"), sshAuthValue],
+            [label("Font"), row(fontPopup, fontSizePopup)],
+            [label("Text colour"), row(textColorWell, resetColor)],
+        ])
+        sshGrid.rowSpacing = 8
+        sshGrid.columnSpacing = 10
+        sshGrid.column(at: 0).xPlacement = .trailing
+        sshGrid.rowAlignment = .firstBaseline
+        sshGrid.isHidden = true
+
+        let details = NSStackView(views: [headerTitle, headerDetail, grid, sshGrid, connectButton])
         details.orientation = .vertical
         details.alignment = .leading
         details.spacing = 10
         details.setCustomSpacing(18, after: headerDetail)
         details.setCustomSpacing(22, after: grid)
+        details.setCustomSpacing(22, after: sshGrid)
 
         // Recent connections fill the rest of the pane.
         history.isLive = { [weak self] id in self?.app.isSessionOpen(hostID: id) ?? false }
@@ -322,13 +362,35 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         shareButton.title = s.sharedFolderPath == NSHomeDirectory()
             ? "Home folder" : (s.sharedFolderPath as NSString).lastPathComponent
         shareButton.isEnabled = s.shareFolder
+
+        fontPopup.selectItem(at: TerminalFont.allCases.firstIndex(of: s.terminalFont) ?? 0)
+        fontSizePopup.selectItem(at: Self.fontSizes.firstIndex(of: s.terminalFontSize) ?? 3)
+        textColorWell.color = NSColor(hex: s.terminalTextColor)?.visibleOnBlack ?? TerminalWindowController.defaultTextColor
+
+        let ssh = selectedHost?.isSSH == true
+        // A jump group has no options of its own, only the terminal's.
+        let jumpGroup = selectedHost == nil && currentGateway?.isJump == true
+        grid.isHidden = ssh || jumpGroup
+        sshGrid.isHidden = !(ssh || jumpGroup)
+        for i in 0..<4 { sshGrid.row(at: i).isHidden = jumpGroup }
+        if let host = selectedHost, ssh {
+            sshUserValue.stringValue = host.sshUser.isEmpty ? "\(NSUserName()), your Mac user name" : host.sshUser
+            sshPortValue.stringValue = host.port.map(String.init) ?? "22"
+            sshJumpValue.stringValue = host.jumpHost.isEmpty ? "None" : host.jumpHost
+            sshAuthValue.stringValue = host.sshAuth == .password
+                ? "Password: asked in a window, and saved in the Keychain if you tick the box."
+                : "Key or certificate"
+                    + (host.identityFile.isEmpty ? ", any of yours." : ": \((host.identityFile as NSString).lastPathComponent).")
+                    + " ssh never asks for a password."
+        }
         updateHeader()
     }
 
     private func updateHeader() {
         if let host = selectedHost, let gateway = settings.gateway(for: host) {
             headerTitle.stringValue = host.title
-            var detail = gateway.isDirect ? "\(host.address), direct" : "\(host.address) through \(gateway.host)"
+            var detail = host.isSSH ? "\(host.address), SSH" + (host.jumpHost.isEmpty ? "" : " through \(host.jumpHost)")
+                : gateway.isDirect ? "\(host.address), direct" : "\(host.address) through \(gateway.host)"
             if settings.hostsWithoutDynamicResolution.contains(host.id) {
                 detail += "  ·  resizing off for this host"
             }
@@ -336,11 +398,28 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         } else if let gateway = currentGateway {
             let count = settings.hosts.filter { $0.gatewayID == gateway.id }.count
             headerTitle.stringValue = gateway.title
-            var parts = gateway.isDirect ? ["No gateway"] : [gateway.host, gateway.transport.label]
+            var parts = gateway.isDirect ? ["No gateway"]
+                : gateway.isJump ? ["SSH jump host"] : [gateway.host, gateway.transport.label]
             parts.append(count == 0 ? "no hosts yet, add one with +" : count == 1 ? "1 host" : "\(count) hosts")
             headerDetail.stringValue = parts.joined(separator: "  ·  ")
         }
         connectButton.isEnabled = selectedHost != nil
+    }
+
+    @objc private func terminalAppearanceChanged() {
+        // Black or nearly black would vanish on the terminal's background.
+        let visible = textColorWell.color.visibleOnBlack
+        if visible.hexString != textColorWell.color.hexString { textColorWell.color = visible }
+        app.update { s in
+            s.terminalFont = TerminalFont.allCases[max(0, fontPopup.indexOfSelectedItem)]
+            s.terminalFontSize = Self.fontSizes[max(0, fontSizePopup.indexOfSelectedItem)]
+            s.terminalTextColor = visible.hexString
+        }
+    }
+
+    @objc private func resetTerminalTextColor() {
+        app.update { $0.terminalTextColor = "" }
+        textColorWell.color = TerminalWindowController.defaultTextColor
     }
 
     @objc private func optionChanged() {
@@ -426,7 +505,8 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         let cell = NSTableCellView()
         if item.isGateway, let gateway = settings.gateways.first(where: { $0.id == item.id }) {
             let icon = NSImageView()
-            icon.image = NSImage(systemSymbolName: gateway.isDirect ? "network" : "lock.shield",
+            icon.image = NSImage(systemSymbolName: gateway.isDirect ? "network"
+                                    : gateway.isJump ? "arrow.triangle.branch" : "lock.shield",
                                  accessibilityDescription: nil)
             icon.contentTintColor = .secondaryLabelColor
             let title = NSTextField(labelWithString: gateway.title)
@@ -440,13 +520,15 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
             let line = NSStackView(views: [icon, title, NSView(), count])
             line.spacing = 5
             views = [line]
-            cell.toolTip = gateway.isDirect ? "Hosts reached without a gateway" : "Through \(gateway.host)"
+            cell.toolTip = gateway.isDirect ? "Hosts reached without a gateway"
+                : gateway.isJump ? "SSH hosts reached through the jump host \(gateway.host)" : "Through \(gateway.host)"
         } else if let host = settings.hosts.first(where: { $0.id == item.id }) {
             let title = NSTextField(labelWithString: host.title)
             title.font = .systemFont(ofSize: 13, weight: .medium)
             title.lineBreakMode = .byTruncatingTail
             title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            let detail = NSTextField(labelWithString: host.address)
+            let detail = NSTextField(labelWithString: host.isSSH
+                ? (host.label.isEmpty ? "SSH" : "SSH  ·  \(host.address)") : host.address)
             detail.font = .systemFont(ofSize: 11)
             detail.textColor = .secondaryLabelColor
             detail.lineBreakMode = .byTruncatingTail
@@ -469,7 +551,7 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
                 line.alignment = .centerY
                 first = line
             }
-            views = host.label.isEmpty ? [first] : [first, detail]
+            views = host.label.isEmpty && !host.isSSH ? [first] : [first, detail]
             cell.toolTip = host.display
         } else {
             return nil
@@ -536,6 +618,8 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
             menu.addItem(.separator())
             add("Edit Host...", #selector(editSelected))
             add("Remove Host", #selector(removeSelected))
+        } else if let item, settings.gateways.first(where: { $0.id == item.id })?.isJump == true {
+            add("Add Host...", #selector(addHost))
         } else if item != nil {
             add("Add Host...", #selector(addHost))
             menu.addItem(.separator())
@@ -562,7 +646,12 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         if let host = selectedHost {
             editHost(host)
         } else if let item = selectedItem, let gateway = settings.gateways.first(where: { $0.id == item.id }) {
-            editGateway(gateway)
+            if gateway.isJump {
+                alert("A jump host follows its hosts",
+                      "Change or clear the Jump host field of the hosts under it.")
+            } else {
+                editGateway(gateway)
+            }
         }
     }
 
@@ -570,17 +659,26 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         if let host = selectedHost {
             removeHost(host)
         } else if let item = selectedItem, let gateway = settings.gateways.first(where: { $0.id == item.id }) {
-            removeGateway(gateway)
+            if gateway.isJump {
+                alert("A jump host follows its hosts",
+                      "It goes away by itself when no host uses it anymore.")
+            } else {
+                removeGateway(gateway)
+            }
         }
     }
 
     @objc private func addHost() {
+        let group = currentGateway
         HostSheet.present(on: window!, host: nil, gateways: settings.gateways,
-                          gatewayID: currentGateway?.id) { [weak self] host in
+                          gatewayID: group?.id, jumpHost: group?.isJump == true ? group?.host : nil) { [weak self] host in
             self?.app.update { s in
                 s.hosts.append(host)
+                s.normalize()
+                let placed = s.hosts.first { $0.id == host.id }
                 s.lastHostID = host.id
-                s.collapsedGateways.removeAll { $0 == host.gatewayID }
+                s.lastGatewayID = placed?.gatewayID ?? s.lastGatewayID
+                s.collapsedGateways.removeAll { $0 == placed?.gatewayID }
             }
             self?.reload()
         }
@@ -591,7 +689,14 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
                           gatewayID: host.gatewayID) { [weak self] edited in
             self?.app.update { s in
                 if let i = s.hosts.firstIndex(where: { $0.id == edited.id }) { s.hosts[i] = edited }
-                s.collapsedGateways.removeAll { $0 == edited.gatewayID }
+                s.normalize()
+                let placed = s.hosts.first { $0.id == edited.id }
+                s.lastGatewayID = placed?.gatewayID ?? s.lastGatewayID
+                s.collapsedGateways.removeAll { $0 == placed?.gatewayID }
+            }
+            // A saved password belongs to the login it was for.
+            if host.isSSH, !edited.isSSH || SSHCommand.login(for: host) != SSHCommand.login(for: edited) {
+                Keychain.deletePassword(for: SSHCommand.login(for: host).keychainKey)
             }
             self?.reload()
         }
@@ -603,7 +708,10 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
             s.hostsWithoutDynamicResolution.removeAll { $0 == host.id }
             s.lastHostID = nil
             s.lastGatewayID = host.gatewayID ?? s.lastGatewayID
+            // A jump host left without hosts goes too.
+            s.normalize()
         }
+        if host.isSSH { Keychain.deletePassword(for: SSHCommand.login(for: host).keychainKey) }
         reload()
     }
 
@@ -678,6 +786,10 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
     }
 
     @objc private func connectSelected() {
+        if let host = selectedHost, host.isSSH {
+            app.openTerminal(host: host)
+            return
+        }
         guard let host = selectedHost, let gw = settings.gateway(for: host) else { return }
         let s = settings
         guard let server = s.accounts.first(where: { $0.id == gw.serverAccountID }) ?? s.accounts.first else {
@@ -735,6 +847,10 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
 /// Small sheets built from a grid of fields.
 private class FormSheet: NSWindowController {
     var onDone: ((Bool) -> Void)?
+    /// Returns what's wrong, shown in the sheet, or nil to save.
+    var validate: (() -> String?)?
+    private(set) var grid: NSGridView!
+    private let problem = NSTextField(wrappingLabelWithString: "")
 
     convenience init(title: String, rows: [[NSView]], okTitle: String = "Save") {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 10),
@@ -743,6 +859,7 @@ private class FormSheet: NSWindowController {
         let heading = NSTextField(labelWithString: title)
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
         let grid = NSGridView(views: rows)
+        self.grid = grid
         grid.rowSpacing = 8
         grid.columnSpacing = 8
         grid.column(at: 0).xPlacement = .trailing
@@ -751,7 +868,9 @@ private class FormSheet: NSWindowController {
         let ok = NSButton(title: okTitle, target: self, action: #selector(ok))
         ok.keyEquivalent = "\r"
         let buttons = NSStackView(views: [NSView(), cancel, ok])
-        let stack = NSStackView(views: [heading, grid, buttons])
+        problem.textColor = .systemRed
+        problem.isHidden = true
+        let stack = NSStackView(views: [heading, grid, problem, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
@@ -764,11 +883,19 @@ private class FormSheet: NSWindowController {
             stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor),
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            problem.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             stack.widthAnchor.constraint(equalToConstant: 400),
         ])
     }
 
-    @objc func ok() { finish(true) }
+    @objc func ok() {
+        if let text = validate?() {
+            problem.stringValue = text
+            problem.isHidden = false
+            return
+        }
+        finish(true)
+    }
     @objc func cancel() { finish(false) }
 
     func finish(_ accepted: Bool) {
@@ -801,8 +928,13 @@ private func show(_ sheet: FormSheet, on parent: NSWindow, done: @escaping (Bool
 }
 
 enum HostSheet {
-    static func present(on parent: NSWindow, host: Host?, gateways: [Gateway], gatewayID: UUID?,
-                        done: @escaping (Host) -> Void) {
+    static func present(on parent: NSWindow, host: Host?, gateways allGateways: [Gateway], gatewayID: UUID?,
+                        jumpHost: String? = nil, done: @escaping (Host) -> Void) {
+        // Jump hosts follow the hosts' own field, they aren't picked here.
+        let gateways = allGateways.filter { !$0.isJump }
+        let kind = NSSegmentedControl(labels: ["Remote Desktop", "SSH"], trackingMode: .selectOne,
+                                      target: nil, action: nil)
+        kind.selectedSegment = host?.isSSH == true || jumpHost != nil ? 1 : 0
         let address = FormSheet.field(host?.address ?? "", placeholder: "192.168.1.20, a name, or host:port")
         let label = FormSheet.field(host?.label ?? "", placeholder: "Optional")
         let dockLabel = NSTextField(string: host?.dockLabel ?? "")
@@ -828,13 +960,102 @@ enum HostSheet {
         labelRow.spacing = 8
         let gatewayPopup = NSPopUpButton()
         gateways.forEach { gatewayPopup.menu?.addItem(withTitle: $0.title, action: nil, keyEquivalent: "") }
-        gatewayPopup.selectItem(at: gateways.firstIndex { $0.id == gatewayID } ?? 0)
-        var rows: [[NSView]] = [[FormSheet.label("Address"), address], [FormSheet.label("Label"), labelRow],
-                                [FormSheet.label("Friendly name"), label]]
-        if gateways.count > 1 { rows.append([FormSheet.label("Gateway"), gatewayPopup]) }
+        gatewayPopup.selectItem(at: gateways.firstIndex { $0.id == gatewayID } ?? gateways.firstIndex(where: \.isDirect) ?? 0)
+
+        // SSH
+        let user = FormSheet.field(host?.sshUser ?? "", placeholder: "Your Mac user name if empty")
+        let port = FormSheet.field(host?.port.map(String.init) ?? "", placeholder: "22")
+        let jump = FormSheet.field(host?.jumpHost ?? jumpHost ?? "", placeholder: "Optional: user@jumpserver")
+        jump.toolTip = "A server to go through first. Hosts with the same jump host are grouped under it."
+        let auth = NSPopUpButton()
+        auth.addItems(withTitles: ["Key or certificate", "Password"])
+        auth.selectItem(at: host?.sshAuth == .password ? 1 : 0)
+        auth.toolTip = "With a key or certificate, ssh never asks for a password, so a fake server can't ask for one either. A password is asked in a window and can be saved in the Keychain."
+        var identity = host?.identityFile ?? ""
+        let keyName = NSTextField(labelWithString: "")
+        keyName.lineBreakMode = .byTruncatingMiddle
+        keyName.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let choose = NSButton(title: "Choose...", target: nil, action: nil)
+        let clear = NSButton(title: "Any", target: nil, action: nil)
+        clear.toolTip = "Let ssh try your keys"
+        func showKey() {
+            keyName.stringValue = identity.isEmpty ? "Any of your keys" : (identity as NSString).lastPathComponent
+            keyName.toolTip = identity.isEmpty ? nil : identity
+            clear.isEnabled = !identity.isEmpty
+        }
+        showKey()
+        let chooseHandler = PopupHandler {
+            let panel = NSOpenPanel()
+            panel.message = "The private key, not the .pub file. A certificate next to it (-cert.pub) is used too."
+            panel.directoryURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".ssh")
+            panel.showsHiddenFiles = true
+            if panel.runModal() == .OK, let url = panel.url { identity = url.path; showKey() }
+        }
+        let clearHandler = PopupHandler { identity = ""; showKey() }
+        choose.target = chooseHandler
+        choose.action = #selector(PopupHandler.changed)
+        clear.target = clearHandler
+        clear.action = #selector(PopupHandler.changed)
+        let keyRow = NSStackView(views: [keyName, choose, clear])
+        keyRow.spacing = 6
+        keyRow.widthAnchor.constraint(equalToConstant: 260).isActive = true
+
+        var rows: [[NSView]] = [[FormSheet.label("Type"), kind], [FormSheet.label("Address"), address],
+                                [FormSheet.label("Label"), labelRow], [FormSheet.label("Friendly name"), label]]
+        let gatewayRow = gateways.count > 1 ? rows.count : nil
+        if gatewayRow != nil { rows.append([FormSheet.label("Gateway"), gatewayPopup]) }
+        let sshRows = rows.count
+        rows += [[FormSheet.label("User"), user], [FormSheet.label("Port"), port],
+                 [FormSheet.label("Jump host"), jump],
+                 [FormSheet.label("Sign in with"), auth], [FormSheet.label("Key"), keyRow]]
         let sheet = FormSheet(title: host == nil ? "Add a host" : "Edit host", rows: rows)
+
+        func layout() {
+            let ssh = kind.selectedSegment == 1
+            if let gatewayRow { sheet.grid.row(at: gatewayRow).isHidden = ssh }
+            for i in sshRows..<(sshRows + 4) { sheet.grid.row(at: i).isHidden = !ssh }
+            sheet.grid.row(at: sshRows + 4).isHidden = !ssh || auth.indexOfSelectedItem != 0
+            address.placeholderString = ssh ? "server.example.com or 192.168.1.20" : "192.168.1.20, a name, or host:port"
+        }
+        let layoutHandler = PopupHandler { layout() }
+        for control in [kind, auth] as [NSControl] {
+            control.target = layoutHandler
+            control.action = #selector(PopupHandler.changed)
+        }
+        layout()
+
+        /// For SSH, "name:22" is the address plus a port.
+        func sshAddress() -> (address: String, port: Int?)? {
+            var text = address.stringValue.trimmingCharacters(in: .whitespaces)
+            var number = port.stringValue.trimmingCharacters(in: .whitespaces)
+            let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+            if parts.count == 2, Int(parts[1]) != nil, number.isEmpty {
+                text = String(parts[0])
+                number = String(parts[1])
+            }
+            if number.isEmpty { return (text, nil) }
+            guard let value = Int(number), (1...65535).contains(value) else { return nil }
+            return (text, value)
+        }
+        sheet.validate = {
+            let trimmed = address.stringValue.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { return "Fill in the address." }
+            guard kind.selectedSegment == 1 else { return nil }
+            guard let parsed = sshAddress() else { return "The port is a number from 1 to 65535." }
+            if !SSHCommand.isValidAddress(parsed.address) {
+                return "That's not a host name or IP address ssh can use."
+            }
+            if !SSHCommand.isValidUser(user.stringValue.trimmingCharacters(in: .whitespaces)) {
+                return "The user can have letters, digits and . _ - \\ @ only, and can't start with a dash."
+            }
+            if (try? SSHCommand.jump(jump.stringValue)) == nil, !jump.stringValue.trimmingCharacters(in: .whitespaces).isEmpty {
+                return "The jump host is user@server or user@server:port, one server."
+            }
+            return nil
+        }
+
         show(sheet, on: parent) { accepted in
-            _ = wellHandler
+            _ = (wellHandler, chooseHandler, clearHandler, layoutHandler)
             well.deactivate()
             NSColorPanel.shared.orderOut(nil)
             let trimmed = address.stringValue.trimmingCharacters(in: .whitespaces)
@@ -844,8 +1065,24 @@ enum HostSheet {
             result.address = trimmed
             result.label = label.stringValue.trimmingCharacters(in: .whitespaces)
             result.dockLabel = dockLabel.stringValue.trimmingCharacters(in: .whitespaces)
-            let index = gatewayPopup.indexOfSelectedItem
-            result.gatewayID = gateways.indices.contains(index) ? gateways[index].id : gatewayID
+            if kind.selectedSegment == 1, let parsed = sshAddress() {
+                result.kind = .ssh
+                result.address = parsed.address
+                result.port = parsed.port
+                result.sshUser = user.stringValue.trimmingCharacters(in: .whitespaces)
+                result.sshAuth = auth.indexOfSelectedItem == 1 ? .password : .key
+                result.identityFile = result.sshAuth == .key ? identity : ""
+                result.jumpHost = jump.stringValue.trimmingCharacters(in: .whitespaces)
+                // An RD Gateway only carries RDP; normalize() puts the host
+                // under its jump host, if it has one.
+                result.gatewayID = gateways.first(where: \.isDirect)?.id ?? gatewayID
+            } else {
+                result.kind = .rdp
+                result.jumpHost = ""
+                let index = gatewayPopup.indexOfSelectedItem
+                result.gatewayID = gateways.indices.contains(index) ? gateways[index].id
+                    : gateways.first(where: \.isDirect)?.id ?? gatewayID
+            }
             done(result)
         }
     }

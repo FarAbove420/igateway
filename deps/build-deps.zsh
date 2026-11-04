@@ -1,11 +1,11 @@
 #!/bin/zsh
 #
 # Builds what iGateway.exe links against, from source, as static libraries
-# in deps/out: OpenSSL, FFmpeg's H.264 decoder, then FreeRDP. Needs only the
-# Xcode Command Line Tools.
+# in deps/out: OpenSSL, FFmpeg's H.264 decoder, FreeRDP, then SwiftTerm for
+# SSH sessions. Needs only the Xcode Command Line Tools.
 # CMake is downloaded for the build and is not part of the app.
 #
-# Every download is checked against the SHA-256 its project publishes.
+# Every download is checked against a pinned SHA-256.
 #
 # A different FreeRDP or FFmpeg source instead of the release (rarely needed):
 #   FREERDP_SOURCE=~/src/FreeRDP ./deps/build-deps.zsh
@@ -51,10 +51,14 @@ FFMPEG_VERSION="9.0.2"
 FFMPEG_SHA256="8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
 FREERDP_VERSION="3.32.2"
 FREERDP_SHA256="e95a505c0057e4d06a3b120477c421028769deba4db9c639ef3465d050f0955c"
+# GitHub publishes no checksum for a tag's source archive. This is the SHA-256
+# of the v1.20.0 archive as downloaded on 2026-11-04.
+SWIFTTERM_VERSION="1.20.0"
+SWIFTTERM_SHA256="36b39a2a4a63afc02099879e00a2b10f7d891c2b8b967db8af6ff45f81cf90f1"
 
-# fetch <url> <sha256>: downloads once, then checks the file every run.
+# fetch <url> <sha256> [file name]: downloads once, then checks the file every run.
 fetch() {
-  local url="$1" sum="$2" file="$DOWNLOADS/${1:t}"
+  local url="$1" sum="$2" file="$DOWNLOADS/${3:-${1:t}}"
   mkdir -p "$DOWNLOADS"
   if [[ ! -f "$file" ]]; then
     print "Downloading ${file:t}..."
@@ -62,7 +66,7 @@ fetch() {
     mv "$file.part" "$file"
   fi
   if [[ "$(shasum -a 256 "$file" | cut -d' ' -f1)" != "$sum" ]]; then
-    print -u2 "${file:t} does not match its published SHA-256. Deleted it; run again to retry."
+    print -u2 "${file:t} does not match its pinned SHA-256. Deleted it; run again to retry."
     rm -f "$file"
     exit 1
   fi
@@ -264,6 +268,44 @@ if [[ -n "$leaks" ]]; then
   print -u2 "FreeRDP picked up libraries from outside deps/out:"
   print -u2 "$leaks"
   exit 1
+fi
+
+# --- SwiftTerm -------------------------------------------------------------------
+# The terminal for SSH sessions. Built with swiftc directly: no Swift package
+# manager, no Xcode. Its iOS files are left out, and the file its package
+# plugin would generate is written here. A Swift module only loads in the
+# compiler that built it, so the stamp includes the compiler's version.
+
+fetch "https://github.com/migueldeicaza/SwiftTerm/archive/refs/tags/v$SWIFTTERM_VERSION.tar.gz" \
+      "$SWIFTTERM_SHA256" "SwiftTerm-$SWIFTTERM_VERSION.tar.gz"
+SWIFTTERM_STAMP="$OUT/.swiftterm-$SWIFTTERM_VERSION-$(swiftc --version 2>&1 | shasum | cut -c1-12)"
+if [[ ! -f "$SWIFTTERM_STAMP" ]]; then
+  print "Building SwiftTerm ($SWIFTTERM_VERSION)..."
+  SWIFTTERM_SRC="$BUILD/swiftterm-src"
+  unpack "$DOWNLOADS/SwiftTerm-$SWIFTTERM_VERSION.tar.gz" "SwiftTerm-$SWIFTTERM_VERSION" "$SWIFTTERM_SRC"
+  rm -rf "$BUILD/swiftterm" "$BUILD/swiftterm.log"
+  mkdir -p "$BUILD/swiftterm" "$OUT/lib" "$OUT/swift" "$OUT/share"
+  cat > "$BUILD/swiftterm/SwiftTermBuildInfo.swift" <<EOF
+// What SwiftTerm's build plugin would generate.
+public enum SwiftTermBuildInfo {
+    public static let branch: String? = nil
+    public static let tag: String? = "v$SWIFTTERM_VERSION"
+    public static let commit: String? = nil
+    public static let hasUncommittedChanges: Bool? = false
+    public static let version: String = "v$SWIFTTERM_VERSION"
+}
+EOF
+  swiftterm_files=("$SWIFTTERM_SRC"/Sources/SwiftTerm/**/*.swift(N) "$BUILD/swiftterm/SwiftTermBuildInfo.swift")
+  swiftterm_files=(${swiftterm_files:#*/iOS/*})
+  # The prefix map keeps the build folder's path out of the app.
+  step swiftterm.log swiftc -O -parse-as-library -swift-version 5 \
+    -target "arm64-apple-macos$MACOS_MIN" -module-name SwiftTerm \
+    -file-prefix-map "$SWIFTTERM_SRC=/opt/igateway/src/SwiftTerm" \
+    -emit-module -emit-module-path "$OUT/swift/SwiftTerm.swiftmodule" \
+    -emit-library -static -o "$OUT/lib/libSwiftTerm.a" $swiftterm_files
+  cp "$SWIFTTERM_SRC/LICENSE" "$OUT/share/SwiftTerm-LICENSE.txt"
+  rm -f "$OUT"/.swiftterm-*(N)
+  touch "$SWIFTTERM_STAMP"
 fi
 
 # --- The test server ----------------------------------------------------------

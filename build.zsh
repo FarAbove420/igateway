@@ -34,8 +34,8 @@ for arg in "$@"; do
   esac
 done
 
-[[ -f "$DEPS/lib/libfreerdp3.a" && -f "$DEPS/lib/libssl.a" ]] || {
-  print -u2 "FreeRDP and OpenSSL are not built yet. Run: ./deps/build-deps.zsh"
+[[ -f "$DEPS/lib/libfreerdp3.a" && -f "$DEPS/lib/libssl.a" && -f "$DEPS/lib/libSwiftTerm.a" ]] || {
+  print -u2 "The libraries are not built yet, or are missing one. Run: ./deps/build-deps.zsh"
   exit 1
 }
 
@@ -57,16 +57,17 @@ print "Compiling the app..."
 swiftc -O -parse-as-library \
   -target arm64-apple-macos13.0 \
   -import-objc-header "$SRC_DIR/bridge/rdpbridge.h" \
-  -I "$SRC_DIR/bridge" \
+  -I "$SRC_DIR/bridge" -I "$DEPS/swift" \
   "$SRC_DIR"/swift/*.swift \
   "$BUILD_DIR/rdpbridge.o" \
   "$DEPS/lib/libfreerdp-client3.a" "$DEPS/lib/libfreerdp3.a" "$DEPS/lib/libwinpr3.a" \
   "$DEPS"/lib/freerdp3/*.a \
   "$DEPS/lib/libavcodec.a" "$DEPS/lib/libswscale.a" "$DEPS/lib/libavutil.a" \
-  "$DEPS/lib/libssl.a" "$DEPS/lib/libcrypto.a" \
+  "$DEPS/lib/libssl.a" "$DEPS/lib/libcrypto.a" "$DEPS/lib/libSwiftTerm.a" \
   "$(xcrun --show-sdk-path)/usr/lib/libz.tbd" \
   -framework Carbon -framework IOSurface -framework AVFoundation -framework AudioToolbox -framework CoreAudio \
   -framework Security -framework SystemConfiguration -framework IOKit -framework CoreFoundation \
+  -framework Metal -framework MetalKit -framework CoreText \
   -o "$APP/Contents/MacOS/$EXEC_NAME"
 
 chmod 755 "$APP/Contents/MacOS/$EXEC_NAME"
@@ -129,7 +130,7 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 # The licences of what is compiled in travel with the app.
 cp "$SRC_DIR/LICENSE" "$SRC_DIR/THIRD_PARTY_NOTICES.md" "$APP/Contents/Resources/" 2>/dev/null || true
-cp "$DEPS/share/FFmpeg-LGPL-2.1.txt" "$APP/Contents/Resources/" 2>/dev/null || true
+cp "$DEPS/share/FFmpeg-LGPL-2.1.txt" "$DEPS/share/SwiftTerm-LICENSE.txt" "$APP/Contents/Resources/" 2>/dev/null || true
 
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || \
   print "note: ad-hoc code signing was skipped."

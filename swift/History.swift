@@ -65,7 +65,11 @@ enum History {
 
     /// A new connection attempt. Returns its id for `update`.
     static func begin(host: Host, account: Account) -> UUID {
-        let entry = HistoryEntry(hostID: host.id, title: host.title, address: host.address, account: account.display)
+        begin(host: host, account: account.display)
+    }
+
+    static func begin(host: Host, account: String) -> UUID {
+        let entry = HistoryEntry(hostID: host.id, title: host.title, address: host.address, account: account)
         modify { $0.insert(entry, at: 0) }
         return entry.id
     }

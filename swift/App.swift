@@ -14,6 +14,8 @@ final class AppController {
     private(set) var settings: AppSettings
     private var launcher: LauncherWindowController?
     private(set) var sessions: [SessionWindowController] = []
+    /// SSH sessions in windows here, only when their own app couldn't start.
+    private var terminals: [TerminalWindowController] = []
     private let persist: Bool
 
     init() {
@@ -75,19 +77,31 @@ final class AppController {
         session.start()
     }
 
+    /// An SSH host in its own app, or in a window here if that fails.
+    func openTerminal(host: Host) {
+        if persist, SessionBundle.open(host: host, password: nil, gatewayPassword: nil) { return }
+        terminals.removeAll { !($0.window?.isVisible ?? false) }
+        let terminal = TerminalWindowController(host: host)
+        terminals.append(terminal)
+        terminal.showWindow(nil)
+        terminal.start()
+    }
+
     var activeSessions: [SessionWindowController] { sessions.filter(\.isActive) }
 
     /// A session to this host is open: its own app, or a window here.
     func isSessionOpen(hostID: UUID) -> Bool {
         !NSRunningApplication.runningApplications(withBundleIdentifier: SessionBundle.bundleIdentifier(for: hostID)).isEmpty
             || sessions.contains { $0.host.id == hostID && $0.isActive }
+            || terminals.contains { $0.host.id == hostID && $0.isActive }
     }
 
     func showSession(hostID: UUID) {
         if let running = NSRunningApplication.runningApplications(
             withBundleIdentifier: SessionBundle.bundleIdentifier(for: hostID)).first {
             SessionBundle.bringToFront(running)
-        } else if let window = sessions.first(where: { $0.host.id == hostID })?.window {
+        } else if let window = sessions.first(where: { $0.host.id == hostID })?.window
+                    ?? terminals.first(where: { $0.host.id == hostID })?.window {
             window.makeKeyAndOrderFront(nil)
         }
     }
@@ -219,6 +233,8 @@ func installMainMenu(target: MenuTarget) {
 @main
 enum Main {
     static func main() {
+        // Run by ssh as its password helper: answer it and stop, no app.
+        if ProcessInfo.processInfo.environment[Askpass.socketVariable] != nil { exit(Askpass.runHelper()) }
         // FreeRDP's log goes through the bridge: into freerdp.log, and read
         // along to tell which step of a failed connection went wrong.
         try? FileManager.default.createDirectory(at: Store.logDirectory, withIntermediateDirectories: true)
