@@ -5,7 +5,7 @@ The details behind the README. The app is AppKit plus a small C bridge
 
 ## Building
 
-`deps/build-deps.zsh` builds three libraries as static libraries in
+`deps/build-deps.zsh` builds four libraries as static libraries in
 `deps/out`, all for Apple Silicon and macOS 13:
 
 - **OpenSSL 3.6.5**, which FreeRDP uses for TLS, NLA and certificates.
@@ -15,11 +15,29 @@ The details behind the README. The app is AppKit plus a small C bridge
   (AVC420 and AVC444) video Windows sends. Built without FFmpeg's GPL and
   non-free parts, so it stays LGPL.
 - **FreeRDP 3.32.2**, with the client channels built in.
+- **SwiftTerm 1.20.0**, the terminal of SSH sessions, compiled with `swiftc`
+  directly: no Swift package manager, no Xcode.
 
 It also downloads CMake to build FreeRDP; CMake is not part of the app. Each
-download is checked against its SHA-256: the one the project publishes, or for
+download is checked against its SHA-256: the one the project publishes, for
 FFmpeg, which publishes signatures instead, the one Homebrew publishes for the
-same file.
+same file, and for SwiftTerm, whose GitHub archive has none, the one of the
+archive as first downloaded.
+
+`build.zsh` runs it by itself when the libraries are missing, or when
+`build-deps.zsh` or the Swift compiler changed since the last run:
+`build-deps.zsh` leaves a stamp of both in `deps/out`.
+
+**Keeping them current.** `deps/check-updates.sh` compares the pinned
+versions with each project's latest release, and for OpenSSL also with the
+latest patch release of the same series, where security fixes arrive. A
+GitHub workflow runs it every Monday and opens an issue when something is
+newer. Updating stays a deliberate change: the new version and its SHA-256
+in `build-deps.zsh`, after which CI builds and tests it.
+
+**Releases.** Publishing a release on GitHub with a tag like `v0.6.0`, the
+version in `build.zsh`, starts a workflow that runs all tests, packs the app
+with `release.zsh` and attaches the zip and its SHA-256 to the release.
 
 The libraries are built for the prefix `/opt/igateway` and then staged into
 `deps/out`. Libraries remember their install folder, and this keeps the

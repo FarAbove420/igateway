@@ -14,8 +14,9 @@
 # --test-server also builds FreeRDP's sample server into deps/out/bin, for
 # the integration test. It is never part of the app.
 #
-# Run again after changing a version: it rebuilds what changed. To start
-# over, delete deps/build and deps/out.
+# build.zsh runs this by itself when the libraries are missing or this file
+# changed. Run again after changing a version: it rebuilds what changed. To
+# start over, delete deps/build and deps/out.
 #
 
 set -eu
@@ -325,4 +326,8 @@ if (( TEST_SERVER )); then
   cp "$FREERDP_SRC/server/Sample/test_icon.bmp" "$OUT/bin/"
 fi
 
+# What build.zsh looks for: built by this very file with this compiler.
+DEPS_ID="$(cat "${0:A}" <(swiftc --version 2>&1) | shasum | cut -c1-16)"
+rm -f "$OUT"/.deps-*(N)
+touch "$OUT/.deps-$DEPS_ID"
 print "Done: $OUT"

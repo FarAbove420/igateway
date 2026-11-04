@@ -34,10 +34,13 @@ for arg in "$@"; do
   esac
 done
 
-[[ -f "$DEPS/lib/libfreerdp3.a" && -f "$DEPS/lib/libssl.a" && -f "$DEPS/lib/libSwiftTerm.a" ]] || {
-  print -u2 "The libraries are not built yet, or are missing one. Run: ./deps/build-deps.zsh"
-  exit 1
-}
+# The libraries, built first when they aren't there yet, or when
+# deps/build-deps.zsh or the compiler changed since (it leaves a stamp).
+DEPS_ID="$(cat "$SRC_DIR/deps/build-deps.zsh" <(swiftc --version 2>&1) | shasum | cut -c1-16)"
+if [[ ! -f "$DEPS/.deps-$DEPS_ID" ]]; then
+  print "Building the libraries first. The first time takes a few minutes."
+  "$SRC_DIR/deps/build-deps.zsh" || exit 1
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

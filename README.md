@@ -49,8 +49,14 @@ with one Dock icon per server. It behaves like a Mac app.
 
 ## Install
 
-You build it yourself. It runs on an Apple Silicon Mac with macOS 13 or
-later. No Homebrew needed.
+It runs on an Apple Silicon Mac with macOS 13 or later.
+
+**Download:** the app is under
+[Releases](https://github.com/FarAbove420/igateway/releases) as a zip. It
+isn't signed by Apple, so macOS blocks it the first time you open it: allow
+it under System Settings, Privacy & Security.
+
+**Or build it yourself**, no Homebrew needed:
 
 1. Install the Xcode Command Line Tools, if you don't have them yet. They
    bring git and the compilers, and need the macOS 14 SDK or later.
@@ -66,21 +72,15 @@ later. No Homebrew needed.
    cd igateway
    ```
 
-3. Build the libraries it uses. This downloads FreeRDP, OpenSSL, FFmpeg and
-   SwiftTerm, checks each against a pinned SHA-256 and builds them into
-   `deps/out`. It takes a few minutes and only has to run once.
-
-   ```bash
-   ./deps/build-deps.zsh
-   ```
-
-4. Build the app and install it.
+3. Build and install it. The first time, this also downloads FreeRDP,
+   OpenSSL, FFmpeg and SwiftTerm, checks each against a pinned SHA-256 and
+   builds them, which takes a few minutes.
 
    ```bash
    ./build.zsh --install
    ```
 
-5. Open iGateway.exe from `~/Applications`, the Applications folder inside
+4. Open iGateway.exe from `~/Applications`, the Applications folder inside
    your home folder (not the main one).
 
 ### Update
@@ -88,12 +88,10 @@ later. No Homebrew needed.
 Quit iGateway first, then in the `igateway` folder:
 
 ```bash
-git pull
-./deps/build-deps.zsh
-./build.zsh --install
+git pull && ./build.zsh --install
 ```
 
-`build-deps.zsh` only rebuilds what changed.
+The libraries are only rebuilt when their versions changed.
 
 ## Your data
 
@@ -142,14 +140,16 @@ iGateway.exe, Acknowledgements.
 
 - `swift/`: the app (host list, sessions, SSH terminal, clipboard, keyboard)
 - `bridge/`: a small C layer between the app and FreeRDP
-- `deps/build-deps.zsh`: downloads and builds the libraries
+- `deps/build-deps.zsh`: downloads and builds the libraries;
+  `deps/check-updates.sh` shows whether they have newer releases
 - `build.zsh`: builds the app; `release.zsh`: packs it for a release
 - `tests/`: the tests, run with `tests/run.zsh`; `tests/run.zsh --screenshots`
   renders the images in this README
 - `icon/`: the app's artwork, and the code that puts it on Apple's icon grid
   and draws the session icon
 - `docs/`: [how it works, and why](docs/how-it-works.md), and the images here
-- `.github/workflows/`: builds and tests every push on GitHub
+- `.github/workflows/`: builds and tests every push, attaches the app to
+  every release, and checks every Monday for newer library releases
 
 ## License
 

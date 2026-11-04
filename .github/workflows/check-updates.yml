@@ -1,0 +1,43 @@
+# Every Monday: do the projects deps/build-deps.zsh pins have newer releases?
+# Opens an issue, or updates the open one, when they do. Security fixes in
+# FreeRDP and OpenSSL arrive this way. Can also be started by hand.
+name: Dependency updates
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./deps/check-updates.sh --updates-only > updates.md
+          if [[ ! -s updates.md ]]; then
+            echo "Everything is current."
+            exit 0
+          fi
+          {
+            echo "Newer releases than deps/build-deps.zsh pins:"
+            echo
+            cat updates.md
+            echo
+            echo "To update: the new version and its SHA-256 go in deps/build-deps.zsh. CI then builds and tests it."
+          } > body.md
+          title="Dependency updates available"
+          number="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')"
+          if [[ -n "$number" ]]; then
+            gh issue edit "$number" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
