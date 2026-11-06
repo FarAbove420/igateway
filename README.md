@@ -11,7 +11,8 @@ with one Dock icon per server. It behaves like a Mac app.
 ## Why I made this
 
 I'm a Windows admin who works on a Mac. Microsoft's Windows App wouldn't
-connect to the RD Gateway at work, so I needed something that would. It
+connect to the RD Gateway at work because of a certificate error, so I
+needed something that would. It
 started as a small window around FreeRDP's own client and grew into this: a
 real Mac app, with SSH added later for the servers and switches.
 
