@@ -122,3 +122,64 @@ terminal.feed(text: [
     prompt,
 ].joined(separator: "\r\n"))
 render(window, to: "terminal.png", fill: .black)
+
+// MARK: The Dock
+
+// A strip of desktop with the Dock: the main app and five sessions, RDP and
+// SSH, each with the label and colour of its host, as SessionAppDelegate
+// draws them. This harness is no app bundle, so the PC comes from icon/.
+let iconFolder = URL(fileURLWithPath: out).deletingLastPathComponent().appendingPathComponent("icon")
+NSApp.applicationIconImage = NSImage(contentsOf: iconFolder.appendingPathComponent("SessionIcon.icns"))
+let sessions = [files, printer, build, web, core]
+let tiles = [NSImage(contentsOf: iconFolder.appendingPathComponent("AppIcon.icns"))!]
+    + sessions.map { SessionAppDelegate.icon(labelled: $0.dockLabel, color: $0.color) }
+
+let tile: CGFloat = 76, gap: CGFloat = 4, pad: CGFloat = 8, dots: CGFloat = 10, margin: CGFloat = 28, tipSpace: CGFloat = 44
+let dock = NSRect(x: margin, y: margin * 0.6, width: pad * 2 + CGFloat(tiles.count) * tile + CGFloat(tiles.count - 1) * gap,
+                  height: pad + tile + dots)
+let canvas = NSSize(width: dock.maxX + margin, height: dock.maxY + tipSpace + margin * 0.6)
+let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(canvas.width * 2), pixelsHigh: Int(canvas.height * 2),
+                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                           colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+rep.size = canvas
+NSGraphicsContext.saveGraphicsState()
+NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+NSBezierPath(roundedRect: NSRect(origin: .zero, size: canvas), xRadius: 12, yRadius: 12).addClip()
+NSGradient(starting: NSColor(hex: "#1B2A4E")!, ending: NSColor(hex: "#4A2752")!)!
+    .draw(in: NSRect(origin: .zero, size: canvas), angle: 20)
+
+let shape = NSBezierPath(roundedRect: dock, xRadius: 20, yRadius: 20)
+NSColor(white: 0.12, alpha: 0.55).setFill()
+shape.fill()
+NSColor(white: 1, alpha: 0.18).setStroke()
+shape.lineWidth = 1
+shape.stroke()
+
+for (i, image) in tiles.enumerated() {
+    let x = dock.minX + pad + CGFloat(i) * (tile + gap)
+    image.draw(in: NSRect(x: x, y: dock.minY + dots, width: tile, height: tile))
+    NSColor(white: 1, alpha: 0.75).setFill()
+    NSBezierPath(ovalIn: NSRect(x: x + tile / 2 - 2, y: dock.minY + dots / 2 - 2, width: 4, height: 4)).fill()
+}
+
+// The name macOS shows over a Dock icon: the host's, not "iGateway.exe".
+let tipTile = tiles.count - 2
+let tipText = NSAttributedString(string: web.title, attributes: [
+    .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor(white: 0.95, alpha: 1),
+])
+let tipCenter = dock.minX + pad + CGFloat(tipTile) * (tile + gap) + tile / 2
+let tipRect = NSRect(x: tipCenter - (tipText.size().width + 20) / 2, y: dock.maxY + 12,
+                     width: tipText.size().width + 20, height: 24)
+let tip = NSBezierPath(roundedRect: tipRect, xRadius: 6, yRadius: 6)
+tip.move(to: NSPoint(x: tipCenter - 6, y: tipRect.minY))
+tip.line(to: NSPoint(x: tipCenter, y: tipRect.minY - 6))
+tip.line(to: NSPoint(x: tipCenter + 6, y: tipRect.minY))
+tip.close()
+NSColor(white: 0.16, alpha: 0.95).setFill()
+tip.fill()
+NSColor(white: 1, alpha: 0.15).setStroke()
+tip.stroke()
+tipText.draw(at: NSPoint(x: tipRect.midX - tipText.size().width / 2, y: tipRect.midY - tipText.size().height / 2))
+NSGraphicsContext.restoreGraphicsState()
+try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out + "/dock.png"))
+print("Wrote dock.png, \(rep.pixelsWide) x \(rep.pixelsHigh)")

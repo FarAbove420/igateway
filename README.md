@@ -49,6 +49,8 @@ real Mac app, with SSH added later for the servers and switches.
 
 ## Everywhere
 
+<img src="docs/dock.png" width="548" alt="The Dock with iGateway and five sessions, each labelled with its server">
+
 - **A Dock icon per server.** Every session is its own app, with the
   server's label on its icon in a colour you pick.
 - **Recent connections:** what you connected to, for how long, and why
