@@ -1,14 +1,22 @@
-# When a release is published on GitHub, builds the app, runs all tests and
-# attaches iGateway.exe-<version>-arm64.zip and its .sha256 to the release.
-# The tag has to match the version in build.zsh: v0.6.0 for 0.6.0.
+# Releases the app when the version in build.zsh changes. On every push to
+# main whose version has no release yet, it runs all tests, packs the app with
+# release.zsh and publishes release v<version> with the zip and its SHA-256,
+# with notes made from the merged pull requests. Pushes that keep the version
+# stop after the first step. To release: raise VERSION in build.zsh and merge.
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+# Two quick pushes never release the same version twice.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   app:
@@ -16,16 +24,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Tag matches the version
+      - name: New version?
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' build.zsh)"
-          if [[ "${{ github.event.release.tag_name }}" != "v$version" ]]; then
-            echo "The tag is ${{ github.event.release.tag_name }}, build.zsh says $version."
-            exit 1
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "v$version is already released, nothing to do."
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
           fi
 
       # The same cache as the build workflow.
       - uses: actions/cache@v6
+        if: steps.version.outputs.new
         with:
           path: |
             deps/downloads
@@ -34,15 +48,24 @@ jobs:
           key: deps-${{ hashFiles('deps/build-deps.zsh') }}
 
       - name: Dependencies
+        if: steps.version.outputs.new
         run: ./deps/build-deps.zsh --test-server
 
       - name: Tests
+        if: steps.version.outputs.new
         run: ./build.zsh && ./tests/run.zsh
 
       - name: Pack
+        if: steps.version.outputs.new
         run: ./release.zsh
 
-      - name: Attach to the release
+      # gh creates the release as a draft, uploads the files, then publishes
+      # it, so a release is never visible without its zip.
+      - name: Publish
+        if: steps.version.outputs.new
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.zip dist/*.sha256 --clobber
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/*.zip dist/*.sha256 \
+            --target "$GITHUB_SHA" --title "iGateway.exe $VERSION" --generate-notes

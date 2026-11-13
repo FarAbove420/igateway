@@ -156,8 +156,9 @@ iGateway.exe, Acknowledgements.
 - `icon/`: the app's artwork, and the code that puts it on Apple's icon grid
   and draws the session icon
 - `docs/`: [how it works, and why](docs/how-it-works.md), and the images here
-- `.github/workflows/`: builds and tests every push, attaches the app to
-  every release, and checks every Monday for newer library releases
+- `.github/workflows/`: builds and tests every push, releases the app when
+  the version in `build.zsh` goes up, and checks every Monday for newer
+  library releases
 
 ## License
 

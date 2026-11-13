@@ -36,9 +36,11 @@ GitHub workflow runs it every Monday and opens an issue when something is
 newer. Updating stays a deliberate change: the new version and its SHA-256
 in `build-deps.zsh`, after which CI builds and tests it.
 
-**Releases.** Publishing a release on GitHub with a tag like `v0.6.0`, the
-version in `build.zsh`, starts a workflow that runs all tests, packs the app
-with `release.zsh` and attaches the zip and its SHA-256 to the release.
+**Releases.** A new version in `build.zsh` is the release. On every push to
+`main`, a workflow checks whether that version has a release yet. If not, it
+runs all tests, packs the app with `release.zsh` and publishes release
+`v<version>` with the zip and its SHA-256, and notes made from the merged
+pull requests. Pushes that keep the version do nothing.
 
 The libraries are built for the prefix `/opt/igateway` and then staged into
 `deps/out`. Libraries remember their install folder, and this keeps the
