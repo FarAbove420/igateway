@@ -42,6 +42,14 @@ runs all tests, packs the app with `release.zsh` and publishes release
 `v<version>` with the zip and its SHA-256, and notes made from the merged
 pull requests. Pushes that keep the version do nothing.
 
+**Telling users.** The main app asks `api.github.com` for the latest release
+at most once a day, without cookies or a cache (`swift/UpdateCheck.swift`).
+It reads only `tag_name` and accepts only up to four dotted numbers; the
+release page is built from that version, so no link from the answer is ever
+opened. A newer version shows as a button in the host list's title bar, with
+the details in its tooltip. The app downloads and installs nothing, and
+session processes never check.
+
 The libraries are built for the prefix `/opt/igateway` and then staged into
 `deps/out`. Libraries remember their install folder, and this keeps the
 builder's own folders out of the app. Nothing is ever installed in

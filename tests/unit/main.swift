@@ -750,5 +750,51 @@ let settingsBefore = try? JSONDecoder().decode(AppSettings.self, from: Data(#"{"
 check("settings saved before terminal options get the defaults",
       settingsBefore?.terminalFont == .sfMono && settingsBefore?.terminalFontSize == 13 && settingsBefore?.terminalTextColor == "")
 
+// MARK: Update check
+print("== Update check")
+check("a release tag gives its version", UpdateCheck.version(fromTag: "v0.7.2") == "0.7.2"
+      && UpdateCheck.version(fromTag: "0.8") == "0.8")
+check("anything but dotted numbers is refused",
+      ["", "v", "v0..1", "v0.7.2-beta", "v1.2.3.4.5", "v1234567", "../x", "v0.7.2\u{0}", "v٣.1", "0.7.2/../x"]
+        .allSatisfy { UpdateCheck.version(fromTag: $0) == nil })
+check("versions compare as numbers", UpdateCheck.isNewer("0.7.10", than: "0.7.9")
+      && UpdateCheck.isNewer("0.8", than: "0.7.9") && UpdateCheck.isNewer("1.0", than: "0.99.99"))
+check("the same or an older version is not newer", !UpdateCheck.isNewer("0.7.1", than: "0.7.1.0")
+      && !UpdateCheck.isNewer("0.7.0", than: "0.7.1") && !UpdateCheck.isNewer("0.7", than: "0.7.0"))
+check("the version comes from tag_name, the rest of the answer is ignored",
+      UpdateCheck.latestVersion(from: Data(#"{"tag_name":"v0.7.2","html_url":"https://evil.example/"}"#.utf8)) == "0.7.2")
+check("an odd tag or a broken answer gives no version",
+      UpdateCheck.latestVersion(from: Data(#"{"tag_name":"v0.7.2 <b>"}"#.utf8)) == nil
+      && UpdateCheck.latestVersion(from: Data("<html>".utf8)) == nil)
+check("the release page is built from the version",
+      UpdateCheck.releasePage("0.7.2").absoluteString == "https://github.com/FarAbove420/igateway/releases/tag/v0.7.2")
+let checkedAt = Date()
+check("checks once a day", UpdateCheck.isDue(lastCheck: nil)
+      && !UpdateCheck.isDue(lastCheck: checkedAt.addingTimeInterval(-3600), now: checkedAt)
+      && UpdateCheck.isDue(lastCheck: checkedAt.addingTimeInterval(-25 * 3600), now: checkedAt))
+check("a last check in the future (clock went back) checks again",
+      UpdateCheck.isDue(lastCheck: checkedAt.addingTimeInterval(3600), now: checkedAt))
+check("settings saved before the update check get it switched on",
+      settingsBefore?.checkForUpdates == true && settingsBefore?.lastUpdateCheck == nil && settingsBefore?.latestRelease == "")
+var withUpdate = AppSettings()
+withUpdate.lastUpdateCheck = Date(timeIntervalSinceReferenceDate: 800_000_000)
+withUpdate.latestRelease = "0.7.2"
+let updateRoundTrip = try? JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(withUpdate))
+check("the last check and its answer are saved", updateRoundTrip?.lastUpdateCheck == withUpdate.lastUpdateCheck
+      && updateRoundTrip?.latestRelease == "0.7.2")
+
+// The host list, in a window that is never shown. This test has no app
+// bundle, so the installed version reads as 0 and any release is newer.
+NSApplication.shared.setActivationPolicy(.prohibited)
+func showsUpdate(_ change: (inout AppSettings) -> Void) -> Bool {
+    var settings = AppSettings()
+    change(&settings)
+    return LauncherWindowController(app: AppController(previewSettings: settings)).showsUpdate
+}
+check("a newer release shows in the title bar", showsUpdate { $0.latestRelease = "0.7.2" })
+check("nothing shows without a known release", !showsUpdate { _ in })
+check("nothing shows with the daily check off", !showsUpdate { $0.latestRelease = "0.7.2"; $0.checkForUpdates = false })
+check("an odd saved release never shows", !showsUpdate { $0.latestRelease = "0.7.2; open x" })
+
 print("\n\(passed) passed, \(failed) failed")
 exit(failed == 0 ? 0 : 1)

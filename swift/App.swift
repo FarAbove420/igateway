@@ -43,6 +43,9 @@ final class AppController {
         return launcher!
     }
 
+    /// The host list shows a newer release as a button in its title bar.
+    func releaseInfoChanged() { launcher?.showUpdate() }
+
     func showLauncher() {
         if launcher == nil { launcher = LauncherWindowController(app: self) }
         launcher?.reload()
@@ -107,8 +110,9 @@ final class AppController {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
+final class AppDelegate: NSObject, NSApplicationDelegate, MenuTarget, NSMenuItemValidation {
     let controller = AppController()
+    private var updateTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
@@ -120,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
         Store.pruneClipboardCaches()
         controller.showLauncher()
         NSApp.activate(ignoringOtherApps: true)
+        startUpdateChecks()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -160,6 +165,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, MenuTarget {
     @objc func createSSHKey() { controller.launcherWindow().createSSHKey() }
 
     @objc func openSSHFolder() { SSHKeys.openFolder() }
+
+    // MARK: Updates
+
+    /// Looks at launch and every hour after, but asks GitHub at most once a
+    /// day, and only while the automatic check is on.
+    private func startUpdateChecks() {
+        checkForUpdatesIfDue()
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
+            self?.checkForUpdatesIfDue()
+        }
+    }
+
+    private func checkForUpdatesIfDue() {
+        let settings = controller.settings
+        guard settings.checkForUpdates, UpdateCheck.isDue(lastCheck: settings.lastUpdateCheck) else { return }
+        checkForUpdates(manual: false)
+    }
+
+    @objc func checkForUpdatesNow() { checkForUpdates(manual: true) }
+
+    @objc func toggleAutomaticUpdateChecks() {
+        controller.update { $0.checkForUpdates.toggle() }
+        controller.releaseInfoChanged()
+        checkForUpdatesIfDue()
+    }
+
+    private func checkForUpdates(manual: Bool) {
+        UpdateCheck.fetch { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .latest(let version):
+                controller.update {
+                    $0.lastUpdateCheck = Date()
+                    $0.latestRelease = version
+                }
+                controller.releaseInfoChanged()
+                let newer = UpdateCheck.isNewer(version, than: UpdateCheck.installed)
+                if newer { AppLog.write("iGateway.exe \(version) is out") }
+                if manual { showUpdateResult(newer ? version : nil) }
+            case .failed(let reason):
+                AppLog.write("Update check failed: \(reason)")
+                guard manual else { return }
+                let alert = NSAlert()
+                alert.messageText = "Couldn't check for updates"
+                alert.informativeText = reason
+                alert.runModal()
+            }
+        }
+    }
+
+    private func showUpdateResult(_ newer: String?) {
+        let alert = NSAlert()
+        guard let newer else {
+            alert.messageText = "iGateway.exe \(UpdateCheck.installed) is the latest version."
+            alert.runModal()
+            return
+        }
+        alert.messageText = "iGateway.exe \(newer) is out"
+        alert.informativeText = "You have \(UpdateCheck.installed)."
+        alert.addButton(withTitle: "Open Release Page")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(UpdateCheck.releasePage(newer)) }
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleAutomaticUpdateChecks) {
+            menuItem.state = controller.settings.checkForUpdates ? .on : .off
+        }
+        return true
+    }
 }
 
 extension NSApplication {
@@ -202,6 +277,9 @@ extension NSApplication {
     @objc optional func exportHosts()
     @objc optional func createSSHKey()
     @objc optional func openSSHFolder()
+    /// Only the main app checks for updates.
+    @objc optional func checkForUpdatesNow()
+    @objc optional func toggleAutomaticUpdateChecks()
 }
 
 /// The menu bar, for the main app and for session processes. The app's name
@@ -216,6 +294,13 @@ func installMainMenu(target: MenuTarget) {
                     action: #selector(NSApplication.showAboutWithCredits(_:)), keyEquivalent: "")
     appMenu.addItem(withTitle: "Acknowledgements",
                     action: #selector(NSApplication.showAcknowledgements(_:)), keyEquivalent: "")
+    if target.responds(to: #selector(MenuTarget.checkForUpdatesNow)) {
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Check for Updates...", action: #selector(MenuTarget.checkForUpdatesNow),
+                        keyEquivalent: "").target = target
+        appMenu.addItem(withTitle: "Check for Updates Automatically",
+                        action: #selector(MenuTarget.toggleAutomaticUpdateChecks), keyEquivalent: "").target = target
+    }
     appMenu.addItem(.separator())
     appMenu.addItem(withTitle: "Hide \(name)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     let others = appMenu.addItem(withTitle: "Hide Others",

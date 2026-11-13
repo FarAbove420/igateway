@@ -110,6 +110,9 @@ The libraries are only rebuilt when their versions changed.
   to save them
 - SSH keys: `~/.ssh`, the Mac's usual place (File, Open SSH Keys Folder)
 - Logs: `~/Library/Logs/iGateway`, or Window, Show Logs. Never passwords.
+- Update check: once a day the app asks GitHub which version is the latest.
+  Nothing about you or your servers goes with it. Switch it off under
+  iGateway.exe, Check for Updates Automatically.
 
 To remove iGateway, delete the app, `~/Library/Application Support/iGateway`,
 `~/Library/Logs/iGateway` and `~/Library/Caches/iGateway`. Saved passwords
