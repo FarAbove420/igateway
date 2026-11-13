@@ -8,10 +8,11 @@ The details behind the README. The app is AppKit plus a small C bridge
 `deps/build-deps.zsh` builds three libraries as static libraries in
 `deps/out`, all for Apple Silicon and macOS 13:
 
-- **OpenSSL 3.6.5**, which FreeRDP uses for TLS, NLA and certificates.
+- **OpenSSL 3.5.9**, which FreeRDP uses for TLS, NLA and certificates.
   FreeRDP's own build files say only OpenSSL is tested on each release, and
-  macOS has no OpenSSL to link against.
-- **FreeRDP 3.33.0**, with the client channels built in. The H.264 video
+  macOS has no OpenSSL to link against. 3.5 is OpenSSL's long-term support
+  series, supported until April 2030; the series after it get 13 months.
+- **FreeRDP 3.33.1**, with the client channels built in. The H.264 video
   Windows sends (AVC420 and AVC444) goes through Apple's VideoToolbox,
   FreeRDP's own decoder for it since 3.33, which leaves hardware or software
   decoding to macOS. That replaced FFmpeg: one library less to build and

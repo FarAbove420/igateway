@@ -34,7 +34,7 @@ check FreeRDP "$(pinned FREERDP_VERSION)" "$(latest_release FreeRDP/FreeRDP)" \
   https://github.com/FreeRDP/FreeRDP/releases
 check OpenSSL "$(pinned OPENSSL_VERSION)" "$(latest_release openssl/openssl | sed 's/^openssl-//')" \
   https://github.com/openssl/openssl/releases
-# Security fixes come as patch releases in the same series: 3.6.x for 3.6.5.
+# Security fixes come as patch releases in the same series: 3.5.x for 3.5.9.
 openssl_series="$(pinned OPENSSL_VERSION | cut -d. -f1-2)"
 check "OpenSSL $openssl_series.x" "$(pinned OPENSSL_VERSION)" \
   "$(git ls-remote --tags --refs https://github.com/openssl/openssl.git "refs/tags/openssl-$openssl_series.*" |
