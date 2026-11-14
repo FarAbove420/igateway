@@ -55,6 +55,9 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
     private let history = HistoryPanel(frame: .zero)
     private let headerTitle = NSTextField(labelWithString: "")
     private let headerDetail = NSTextField(labelWithString: "")
+    /// A newer release, as a button at the right of the title bar.
+    private let updateButton = NSButton(title: "", target: nil, action: nil)
+    private let updateAccessory = NSTitlebarAccessoryViewController()
 
     init(app: AppController) {
         self.app = app
@@ -264,6 +267,24 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
             modePopup.widthAnchor.constraint(equalTo: serverPopup.widthAnchor),
             displayPopup.widthAnchor.constraint(equalTo: serverPopup.widthAnchor),
         ])
+        updateButton.bezelStyle = .inline
+        updateButton.controlSize = .small
+        updateButton.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+        updateButton.imagePosition = .imageLeading
+        updateButton.target = self
+        updateButton.action = #selector(openRelease)
+        updateButton.translatesAutoresizingMaskIntoConstraints = false
+        let holder = NSView(frame: NSRect(x: 0, y: 0, width: 140, height: 28))
+        holder.addSubview(updateButton)
+        NSLayoutConstraint.activate([
+            updateButton.centerYAnchor.constraint(equalTo: holder.centerYAnchor),
+            updateButton.trailingAnchor.constraint(equalTo: holder.trailingAnchor, constant: -10),
+        ])
+        updateAccessory.layoutAttribute = .trailing
+        updateAccessory.view = holder
+        updateAccessory.isHidden = true
+        window?.addTitlebarAccessoryViewController(updateAccessory)
+
         let autosave = "LauncherSidebar"
         let remembered = UserDefaults.standard.object(forKey: "NSSplitView Subview Frames \(autosave)") != nil
         split.autosaveName = autosave
@@ -338,6 +359,29 @@ final class LauncherWindowController: NSWindowController, NSOutlineViewDataSourc
         }
         reloading = false
         showSelection()
+        showUpdate()
+    }
+
+    /// The title bar button for a newer release, while the daily check is on.
+    func showUpdate() {
+        let latest = settings.latestRelease
+        let newer = settings.checkForUpdates && UpdateCheck.version(fromTag: latest) == latest
+            && UpdateCheck.isNewer(latest, than: UpdateCheck.installed)
+        updateAccessory.isHidden = !newer
+        guard newer else { return }
+        updateButton.title = "\(latest) is out"
+        updateButton.toolTip = "iGateway.exe \(latest) is out, you have \(UpdateCheck.installed). Opens its release page "
+            + "with the download. Built it yourself? Quit iGateway, then in the igateway folder: "
+            + "git pull && ./build.zsh --install"
+        updateAccessory.view.setFrameSize(NSSize(width: updateButton.fittingSize.width + 20, height: 28))
+    }
+
+    /// True while the title bar shows a newer release. For tests.
+    var showsUpdate: Bool { !updateAccessory.isHidden }
+
+    @objc private func openRelease() {
+        guard UpdateCheck.version(fromTag: settings.latestRelease) == settings.latestRelease else { return }
+        NSWorkspace.shared.open(UpdateCheck.releasePage(settings.latestRelease))
     }
 
     /// Fills the right side for whatever is selected.

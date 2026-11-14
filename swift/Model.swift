@@ -428,12 +428,17 @@ struct AppSettings: Codable {
     var terminalFont: TerminalFont = .sfMono
     var terminalFontSize: Double = 13
     var terminalTextColor = ""
+    /// The daily question to GitHub for a newer release, and its last answer.
+    var checkForUpdates = true
+    var lastUpdateCheck: Date?
+    var latestRelease = ""
 
     enum CodingKeys: String, CodingKey {
         case gateways, hosts, accounts, lastGatewayID, lastHostID, keyboardLayout, keyboardMode
         case sound, shareFolder, sharedFolderPath, sharpOnRetina, openFullscreen
         case dynamicResolution, hostsWithoutDynamicResolution, collapsedGateways, windowWidth, windowHeight
         case terminalFont, terminalFontSize, terminalTextColor
+        case checkForUpdates, lastUpdateCheck, latestRelease
     }
 
     init() {}
@@ -461,6 +466,9 @@ struct AppSettings: Codable {
         terminalFont = c.value(.terminalFont, or: d.terminalFont)
         terminalFontSize = c.value(.terminalFontSize, or: d.terminalFontSize)
         terminalTextColor = c.value(.terminalTextColor, or: d.terminalTextColor)
+        checkForUpdates = c.value(.checkForUpdates, or: d.checkForUpdates)
+        lastUpdateCheck = c.value(.lastUpdateCheck, or: nil)
+        latestRelease = c.value(.latestRelease, or: d.latestRelease)
     }
 
     /// Makes sure there is at least one gateway, every host belongs to one,

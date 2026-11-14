@@ -24,7 +24,7 @@ APP_NAME="iGateway.exe"
 APP="$BUILD_DIR/${APP_NAME}.app"
 EXEC_NAME="igateway"
 BUNDLE_ID="${BUNDLE_ID:-io.github.farabove420.igateway}"
-VERSION="0.7.1"
+VERSION="0.8.0"
 
 INSTALL=0
 for arg in "$@"; do
