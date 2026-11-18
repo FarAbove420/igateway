@@ -41,7 +41,7 @@ final class SSHTerminalView: TerminalView, TerminalViewDelegate, LocalProcessDel
     /// separate commands, the first one right away: ask first.
     override func paste(_ sender: Any) {
         guard let window, let text = NSPasteboard.general.string(forType: .string),
-              Self.pasteNeedsConfirmation(text, bracketed: terminal.bracketedPasteMode) else {
+              Self.pasteNeedsConfirmation(text, bracketed: terminalInputStateSnapshot()?.bracketedPasteMode ?? false) else {
             super.paste(sender)
             return
         }
@@ -115,7 +115,8 @@ final class SSHTerminalView: TerminalView, TerminalViewDelegate, LocalProcessDel
 
     func getWindowSize() -> winsize {
         let scale = window?.backingScaleFactor ?? 2
-        return winsize(ws_row: UInt16(terminal.rows), ws_col: UInt16(terminal.cols),
+        let size = terminalDimensions
+        return winsize(ws_row: UInt16(size.rows), ws_col: UInt16(size.cols),
                        ws_xpixel: UInt16(min(bounds.width * scale, 65535)),
                        ws_ypixel: UInt16(min(bounds.height * scale, 65535)))
     }
