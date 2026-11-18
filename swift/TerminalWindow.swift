@@ -105,11 +105,10 @@ final class SSHTerminalView: TerminalView, TerminalViewDelegate, LocalProcessDel
 
     // MARK: LocalProcessDelegate
 
-    /// SwiftTerm 1.20 hands over waitpid's raw status, not the exit code (the
-    /// session test checks this). nil: ended by a signal, or unknown.
+    /// ssh's exit code (the session test checks it). nil: ended by a signal,
+    /// or unknown.
     func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
-        let code = exitCode.flatMap { $0 & 0x7f == 0 ? ($0 >> 8) & 0xff : nil }
-        DispatchQueue.main.async { self.onExit?(code) }
+        DispatchQueue.main.async { self.onExit?(exitCode) }
     }
 
     func dataReceived(slice: ArraySlice<UInt8>) { feed(byteArray: slice) }
