@@ -33,7 +33,7 @@ TLS and the cryptography FreeRDP uses to log in.
 
 The terminal of SSH sessions.
 
-- https://github.com/migueldeicaza/SwiftTerm, version 1.20.0
+- https://github.com/migueldeicaza/SwiftTerm, version 1.99.3
 - MIT License, below. The app carries it as `SwiftTerm-LICENSE.txt`.
 - SwiftTerm is based on xterm.js (https://github.com/xtermjs/xterm.js, MIT,
   in the same licence text), and has a small part ported from libsixel and

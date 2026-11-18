@@ -17,7 +17,7 @@ The details behind the README. The app is AppKit plus a small C bridge
   FreeRDP's own decoder for it since 3.33, which leaves hardware or software
   decoding to macOS. That replaced FFmpeg: one library less to build and
   keep current, and no LGPL code in the app.
-- **SwiftTerm 1.20.0**, the terminal of SSH sessions, compiled with `swiftc`
+- **SwiftTerm 1.99.3**, the terminal of SSH sessions, compiled with `swiftc`
   directly: no Swift package manager, no Xcode.
 
 It also downloads CMake to build FreeRDP; CMake is not part of the app. Each
